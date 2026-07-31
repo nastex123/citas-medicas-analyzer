@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gestión de Citas Médicas Analyzer</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
+.container { max-width: 960px; margin: 0 auto; padding: 20px; }
+h1 { text-align: center; margin-bottom: 10px; color: #1a1a2e; font-size: 24px; }
+h2 { margin: 20px 0 10px; color: #1a1a2e; font-size: 18px; }
+.subtitle { text-align: center; color: #888; margin-bottom: 20px; font-size: 13px; }
+
+.mode-selector { display: flex; gap: 10px; margin-bottom: 15px; }
+.mode-btn { flex: 1; padding: 10px; border: 2px solid #ccc; border-radius: 8px; background: #fff; cursor: pointer; font-size: 14px; text-align: center; transition: all 0.2s; }
+.mode-btn.active { border-color: #1a1a2e; background: #1a1a2e; color: #fff; }
+.mode-btn:hover:not(.active) { border-color: #888; }
+
+.file-area { border: 2px dashed #ccc; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 15px; background: #fff; }
+.file-area.dragover { border-color: #1a1a2e; background: #f0f0ff; }
+.file-area input[type="file"] { display: none; }
+.file-area label { cursor: pointer; color: #1a1a2e; font-weight: bold; }
+.file-name { margin-top: 8px; color: #666; font-size: 13px; }
+
+.folder-input { display: flex; gap: 8px; margin-bottom: 15px; }
+.folder-input input { flex: 1; padding: 8px 12px; border: 2px solid #ccc; border-radius: 6px; font-size: 14px; }
+.folder-input input:focus { border-color: #1a1a2e; outline: none; }
+
+.btn { padding: 10px 24px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; font-weight: bold; transition: all 0.2s; }
+.btn-primary { background: #1a1a2e; color: #fff; }
+.btn-primary:hover { background: #333; }
+.btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+.btn-secondary { background: #e0e0e0; color: #333; margin-left: 8px; }
+.btn-secondary:hover { background: #ccc; }
+
+.actions { display: flex; gap: 10px; align-items: center; margin-bottom: 15px; flex-wrap: wrap; }
+
+.status { padding: 8px 12px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; display: none; }
+.status.loading { background: #fff3cd; color: #856404; display: block; }
+.status.success { background: #d4edda; color: #155724; display: block; }
+.status.error { background: #f8d7da; color: #721c24; display: block; }
+
+.metrics { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
+.metric-card { flex: 1; min-width: 130px; background: #fff; border-radius: 8px; padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
+.metric-card .label { font-size: 11px; color: #888; text-transform: uppercase; margin-bottom: 4px; }
+.metric-card .value { font-size: 18px; font-weight: bold; color: #1a1a2e; }
+.metric-card .value.green { color: #28a745; }
+.metric-card .value.red { color: #dc3545; }
+
+.progress-container { margin-bottom: 15px; background: #fff; border-radius: 8px; padding: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: none; }
+.progress-container.active { display: block; }
+.progress-bar-track { width: 100%; height: 12px; background: #e9ecef; border-radius: 6px; overflow: hidden; margin-bottom: 8px; }
+.progress-bar-fill { height: 100%; background: linear-gradient(90deg, #1a1a2e, #4a4a8a); border-radius: 6px; transition: width 0.3s ease; width: 0%; }
+.progress-info { display: flex; justify-content: space-between; font-size: 13px; color: #666; }
+.progress-stage { font-weight: bold; color: #1a1a2e; }
+
+table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); font-size: 13px; }
+th { background: #1a1a2e; color: #fff; padding: 10px 8px; text-align: left; font-size: 12px; text-transform: uppercase; }
+td { padding: 8px; border-bottom: 1px solid #eee; }
+tr:hover { background: #f8f8f8; }
+
+.table-scroll { max-height: 400px; overflow-y: auto; }
+.empty-state { text-align: center; padding: 40px; color: #aaa; font-size: 14px; }
+
+.result-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; color: #fff; }
+.tag-reprogramar { background: #17a2b8; }
+.tag-cancelar { background: #dc3545; }
+.tag-confirmar { background: #28a745; }
+.tag-otro { background: #6c757d; }
+
+.accion-chip { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; color: #fff; }
+.accion-chip.reprogramar { background: #17a2b8; }
+.accion-chip.cancelar { background: #dc3545; }
+.accion-chip.confirmar { background: #28a745; }
+.accion-chip.otro { background: #6c757d; }
+.horario-chip { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; color: #333; background: #ffc107; }
+.horario-chip.sin_preferencia { background: #e0e0e0; color: #666; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Gestión de Citas Médicas Analyzer</h1>
+  <p class="subtitle">Ingesta flexible de solicitudes de citas médicas (Excel) + tokenización ES vs EN con o200k_base</p>
+
+  <h2>Modo de ingesta</h2>
+  <div class="mode-selector">
+    <button class="mode-btn active" id="modeFile" onclick="setMode('file')">Archivo .xlsx</button>
+    <button class="mode-btn" id="modeFolder" onclick="setMode('folder')">Carpeta</button>
+  </div>
+
+  <div id="fileArea" class="file-area">
+    <input type="file" id="fileInput" accept=".xlsx">
+    <label for="fileInput">Clic para seleccionar archivo .xlsx</label>
+    <div class="file-name" id="fileName">Ningún archivo seleccionado</div>
+  </div>
+
+  <div id="folderArea" style="display:none;">
+    <div class="folder-input">
+      <input type="text" id="folderPath" placeholder="/ruta/a/carpeta/con/archivos/xlsx">
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn btn-primary" id="btnRun" onclick="runAnalysis()">Ejecutar análisis</button>
+    <button class="btn btn-secondary" id="btnExportJson" onclick="exportResults('json')" style="display:none;">Exportar JSON</button>
+    <button class="btn btn-secondary" id="btnExportExcel" onclick="exportResults('excel')" style="display:none;">Exportar Excel</button>
+  </div>
+
+  <div id="status" class="status"></div>
+
+  <div id="progressContainer" class="progress-container">
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill" id="progressFill"></div>
+    </div>
+    <div class="progress-info">
+      <span class="progress-stage" id="progressStage">Iniciando...</span>
+      <span id="progressCount"></span>
+    </div>
+  </div>
+
+  <div id="metrics" class="metrics" style="display:none;">
+    <div class="metric-card">
+      <div class="label">Mensajes procesados</div>
+      <div class="value" id="metricTotal">0</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Tokens ES (Sin Traducir)</div>
+      <div class="value" id="metricEs">0</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Tokens EN (Traducido)</div>
+      <div class="value" id="metricEn">0</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Costo Sin Traducir</div>
+      <div class="value red" id="metricCostEs">$0</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Costo Traducido</div>
+      <div class="value" id="metricCostEn">$0</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Ahorro Económico</div>
+      <div class="value green" id="metricSave">$0</div>
+    </div>
+  </div>
+
+  <h2>Resultados</h2>
+  <div id="results" class="table-scroll">
+    <div class="empty-state">Ejecute un análisis para ver resultados</div>
+  </div>
+</div>
+
+<script>
+let currentResults = [];
+let currentMode = 'file';
+
+function setMode(mode) {
+    currentMode = mode;
+    document.getElementById('modeFile').classList.toggle('active', mode === 'file');
+    document.getElementById('modeFolder').classList.toggle('active', mode === 'folder');
+    document.getElementById('fileArea').style.display = mode === 'file' ? 'block' : 'none';
+    document.getElementById('folderArea').style.display = mode === 'folder' ? 'block' : 'none';
+}
+
+const fileInput = document.getElementById('fileInput');
+fileInput.addEventListener('change', function() {
+    document.getElementById('fileName').textContent = this.files.length ? this.files[0].name : 'Ningún archivo seleccionado';
+});
+
+const fileArea = document.querySelector('.file-area');
+fileArea.addEventListener('dragover', (e) => { e.preventDefault(); fileArea.classList.add('dragover'); });
+fileArea.addEventListener('dragleave', () => { fileArea.classList.remove('dragover'); });
+fileArea.addEventListener('drop', (e) => {
+    e.preventDefault();
+    fileArea.classList.remove('dragover');
+    if (e.dataTransfer.files.length) {
+        fileInput.files = e.dataTransfer.files;
+        document.getElementById('fileName').textContent = e.dataTransfer.files[0].name;
+    }
+});
+
+function setStatus(msg, type) {
+    const el = document.getElementById('status');
+    el.className = 'status ' + type;
+    el.textContent = msg;
+}
+
+function hideStatus() {
+    document.getElementById('status').className = 'status';
+}
+
+function showProgress() {
+    document.getElementById('progressContainer').classList.add('active');
+}
+
+function hideProgress() {
+    document.getElementById('progressContainer').classList.remove('active');
+    document.getElementById('progressFill').style.width = '0%';
+}
+
+function updateProgress(stage, message, progress, total, processed) {
+    const pct = Math.min(Math.max(progress || 0, 0), 100);
+    document.getElementById('progressFill').style.width = pct + '%';
+    document.getElementById('progressStage').textContent = message;
+
+    const countEl = document.getElementById('progressCount');
+    if (total && processed !== undefined) {
+        countEl.textContent = `${processed} / ${total}`;
+    } else {
+        countEl.textContent = '';
+    }
+}
+
+async function runAnalysis() {
+    hideStatus();
+    hideProgress();
+    const btn = document.getElementById('btnRun');
+    btn.disabled = true;
+    btn.textContent = 'Iniciando...';
+    setStatus('Iniciando...', 'loading');
+
+    try {
+        let url, formData;
+
+        if (currentMode === 'file') {
+            const file = fileInput.files[0];
+            if (!file) {
+                setStatus('Seleccione un archivo .xlsx primero', 'error');
+                return;
+            }
+            formData = new FormData();
+            formData.append('file', file);
+            formData.append('optimizar_tokens', 'true');
+            url = '/api/analyze/upload/stream?optimizar_tokens=true';
+        } else {
+            const folderPath = document.getElementById('folderPath').value.trim();
+            if (!folderPath) {
+                setStatus('Ingrese una ruta de carpeta', 'error');
+                return;
+            }
+            formData = new FormData();
+            formData.append('folder_path', folderPath);
+            formData.append('optimizar_tokens', 'true');
+            url = '/api/analyze/folder?optimizar_tokens=true';
+        }
+
+        btn.textContent = 'Procesando...';
+        showProgress();
+        setStatus('Procesando...', 'loading');
+
+        const response = await fetch(url, { method: 'POST', body: formData });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${response.status}`);
+        }
+
+        if (currentMode === 'file') {
+            await readStream(response);
+        } else {
+            const data = await response.json();
+            currentResults = data.results || [];
+            finishAnalysis(currentResults);
+        }
+    } catch (err) {
+        hideProgress();
+        setStatus('Error: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Ejecutar análisis';
+    }
+}
+
+async function readStream(response) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let results = [];
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                try {
+                    const event = JSON.parse(line.slice(6));
+
+                    if (event.stage === 'completo') {
+                        results = event.results || [];
+                        finishAnalysis(results, event.timings);
+                        return;
+                    }
+
+                    updateProgress(
+                        event.stage,
+                        event.message,
+                        event.progress,
+                        event.total,
+                        event.processed
+                    );
+
+                    if (event.results && event.results.length) {
+                        results = event.results;
+                    }
+                } catch (e) {
+                    console.warn('Error parsing SSE event:', e);
+                }
+            }
+        }
+    }
+}
+
+function finishAnalysis(results, timings) {
+    currentResults = results;
+
+    if (!results.length) {
+        hideProgress();
+        setStatus('No se encontraron mensajes para analizar', 'success');
+        return;
+    }
+
+    renderResults(results);
+    renderMetrics(results);
+
+    document.getElementById('btnExportJson').style.display = 'inline-block';
+    document.getElementById('btnExportExcel').style.display = 'inline-block';
+
+    hideProgress();
+    setStatus(`Completado: ${results.length} grupo(s) representativo(s) analizado(s)`, 'success');
+}
+
+function renderResults(results) {
+    const container = document.getElementById('results');
+    if (!results.length) {
+        container.innerHTML = '<div class="empty-state">No se encontraron mensajes para analizar</div>';
+        return;
+    }
+
+    let html = '<table><thead><tr>';
+    html += '<th>Especialidad</th><th>Mensaje representativo</th><th>Acción</th><th>Horario</th><th>Mensajes</th><th>Tokens ES</th><th>Tokens EN</th><th>Frag. ES/EN</th><th>Costo USD (EN)</th>';
+    html += '</tr></thead><tbody>';
+
+    results.forEach((r) => {
+        const m = r.metrics || {};
+        const e = r.extracted_data || r || {};
+        const intent = e.intent || {};
+
+        const accion = String(intent.accion || 'otro').trim().toLowerCase();
+        const horario = String(intent.preferencia_horario || 'sin_preferencia').trim().toLowerCase();
+        const especialidad = e.especialidad_medica || e.intent?.especialidad || 'N/A';
+
+        const origTokens = m.original_tokens || 0;
+        const translTokens = m.translated_tokens || 0;
+        const frag = m.fragmentacion_ratio !== undefined ? m.fragmentacion_ratio : (translTokens ? (origTokens / translTokens) : 1);
+        const cost = translTokens ? ((translTokens / 1e6) * 2.50).toFixed(4) : '0.0000';
+
+        const nMessages = e.messages_in_cluster || 1;
+
+        html += '<tr>';
+        html += `<td><strong>${escHtml(especialidad)}</strong></td>`;
+        html += `<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(e.summary_es || '')}">${escHtml(e.summary_es || 'N/A')}</td>`;
+        html += `<td><span class="accion-chip ${accion}">${escHtml(accion)}</span></td>`;
+        html += `<td><span class="horario-chip ${horario}">${escHtml(horario)}</span></td>`;
+        html += `<td>${nMessages.toLocaleString()}</td>`;
+        html += `<td>${origTokens.toLocaleString()}</td>`;
+        html += `<td>${translTokens.toLocaleString()}</td>`;
+        html += `<td>${Number(frag).toFixed(3)}</td>`;
+        html += `<td>$${cost}</td>`;
+        html += '</tr>';
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+function renderMetrics(results) {
+    const el = document.getElementById('metrics');
+    el.style.display = 'flex';
+
+    let totalEs = 0, totalEn = 0;
+    results.forEach(r => {
+        const m = r.metrics || {};
+        totalEs += m.original_tokens || 0;
+        totalEn += m.translated_tokens || 0;
+    });
+
+    const costoSinTraducir = (totalEs / 1e6) * 2.50;
+    const costoTraducido = (totalEn / 1e6) * 2.50;
+    const ahorro = costoSinTraducir - costoTraducido;
+
+    document.getElementById('metricTotal').textContent = results.length;
+    document.getElementById('metricEs').textContent = totalEs.toLocaleString();
+    document.getElementById('metricEn').textContent = totalEn.toLocaleString();
+    document.getElementById('metricCostEs').textContent = '$' + costoSinTraducir.toFixed(4);
+    document.getElementById('metricCostEn').textContent = '$' + costoTraducido.toFixed(4);
+    document.getElementById('metricSave').textContent = '$' + ahorro.toFixed(4);
+    document.getElementById('metricSave').className = 'value ' + (ahorro >= 0 ? 'green' : 'red');
+}
+
+async function exportResults(format) {
+    try {
+        const mode = currentMode === 'folder' ? 'folder' : 'file';
+        const url = `/api/analyze/export?format=${format}&optimizar_tokens=true&mode=${mode}`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Export failed');
+
+        const blob = await response.blob();
+        const urlObj = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = urlObj;
+        a.download = `citas_analysis_${Date.now()}.${format}`;
+        a.click();
+        URL.revokeObjectURL(urlObj);
+    } catch (err) {
+        setStatus('Error al exportar: ' + err.message, 'error');
+    }
+}
+
+function escHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
