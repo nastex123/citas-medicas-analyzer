@@ -44,6 +44,9 @@ class ExtractedCitaData(BaseModel):
     especialidad_medica: str = ""
     cluster_id: int = -1
     messages_in_cluster: int = 0
+    texto_original: str = ""
+    texto_limpio: str = ""
+    texto_en: str = ""
 
 
 class AnalysisResponse(BaseModel):
@@ -52,7 +55,31 @@ class AnalysisResponse(BaseModel):
     extracted_data: ExtractedCitaData
 
 
+class MessageDetail(BaseModel):
+    """Detalle por mensaje individual (una fila por mensaje en el export)."""
+    id_paciente: str = ""
+    especialidad_medica: str = ""
+    cluster_id: int = -1
+    messages_in_cluster: int = 0
+    accion: str = "otro"
+    preferencia_horario: str = "sin_preferencia"
+    texto_original: str = ""
+    texto_limpio: str = ""
+    texto_en: str = ""
+    tokens_es: int = 0
+    tokens_en: int = 0
+    fragmentacion_ratio: float = 1.0
+
+
 class BatchAnalysisResponse(BaseModel):
     """Respuesta para procesamiento por lotes (upload / folder)."""
     total: int
     results: list[AnalysisResponse]
+    timings: dict[str, float] = Field(default_factory=dict)
+    details: list[MessageDetail] = Field(default_factory=list)
+
+
+class ExportRequest(BaseModel):
+    """Cuerpo de la petición de exportación a .xlsx."""
+    details: list[MessageDetail] = Field(default_factory=list)
+    results: list[AnalysisResponse] = Field(default_factory=list)

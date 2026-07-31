@@ -61,15 +61,21 @@ scripts/procesar_excel_async.py  ──HTTP POST──►  app/main.py (FastAPI)
 ### Pipeline de análisis (por especialidad médica)
 
 1. **Lectura Excel** — `pandas` + `openpyxl`, validación de columnas
-2. **Agrupación** — `groupby('especialidad_medica')` → grupos por especialidad
-3. **Clustering semántico** (por especialidad):
+2. **Limpieza** — `_limpiar_texto`: strip, colapsa espacios, quita emojis
+3. **Agrupación** — `groupby('especialidad_medica')` → grupos por especialidad
+4. **Clustering semántico** (por especialidad):
    - `TfidfVectorizer(max_features=500, ngram_range=(1,2))`
    - `MiniBatchKMeans(k=5, random_state=42)`
    - Selecciona representante: mensaje más cercano al centroide
-4. **Extracción de intención** (sobre representantes):
-   - `HashingVectorizer(n_features=2^20)` → `LinearSVC` para `accion`, `preferencia_horario`
-   - Keywords + modelo → `especialidad`
-5. **Tokens** — `tiktoken` (o200k_base) sobre todo el cluster, ratio de fragmentación ES/EN
+5. **Extracción de intención** — en lote (`_predecir_intencion_lote`): un solo
+   `transform` + `predict` para todos los mensajes del grupo
+6. **Detalle por mensaje** — una fila por mensaje con intención, tokens ES
+   (tiktoken o200k_base) y tokens EN del representativo de su clúster
+7. **Tokens** — ratio de fragmentación ES/EN por grupo representativo
+
+Los tiempos por etapa (`agrupacion`, `clustering`, `traduccion`, `tokenizacion`,
+`analisis`) se agregan con el **máximo entre especialidades** (se procesan en
+paralelo), como proxy del tiempo de pared real de cada fase.
 
 ## 3. Instalación
 
@@ -97,13 +103,14 @@ python scripts/train_pipeline.py        # Entrena y guarda los 3 modelos + vecto
 
 ```powershell
 python scripts/generate_citas.py             # 10,000 solicitudes (default)
-python scripts/generate_citas.py 20000       # volumen personalizado (ej. 20,000)
+python scripts/generate_citas.py 50000       # volumen del dataset de prueba actual
 ```
 
 - **Salida**: `backend/data/citas_medicas_solicitudes.xlsx` (sobrescribe el archivo si ya existe).
 - **Requiere**: `faker` y `pandas` (ya incluidos en `requirements.txt`).
 - **Columnas**: `id_paciente`, `paciente`, `ciudad`, `especialidad_medica`, `fecha_solicitada`, `mensaje_texto`.
 - El 10% de los mensajes se genera vacío (dato sucio intencional para probar tolerancia).
+- El dataset de prueba actual tiene **50,000 filas** (≈45,000 mensajes no vacíos).
 
 ## 5. Levantar el backend
 
@@ -143,7 +150,9 @@ curl -N -X POST http://127.0.0.1:8000/api/analyze/upload/stream \
   -F "optimizar_tokens=false"
 ```
 
-Devuelve eventos SSE con `stage` (lectura, clustering, clasificacion, completo) y progreso porcentual.
+Devuelve eventos SSE con `stage` (lectura, clustering, clasificacion, detalle,
+completo) y progreso porcentual. Los `details` (una fila por mensaje) se envían en
+lotes de 500 por evento (`details_batch`).
 
 ### POST `/api/analyze/folder` — Escanear carpeta
 
@@ -153,6 +162,8 @@ curl -X POST http://127.0.0.1:8000/api/analyze/folder \
   -F "optimizar_tokens=false"
 ```
 
+Devuelve `total`, `results` (representativos), `timings` y `details` (una fila por mensaje).
+
 ### GET `/api/analyze/cost-estimate` — Proyección económica
 
 ```bash
@@ -161,17 +172,36 @@ curl "http://127.0.0.1:8000/api/analyze/cost-estimate?messages_per_day=15000&opt
 
 Usa la tarifa de $2.50 USD por millón de tokens de entrada (15,000 msgs/día por defecto).
 
-### GET `/api/analyze/export` — Exportar resultados
+### POST `/api/analyze/export` — Exportar Excel (.xlsx)
 
-```bash
-curl "http://127.0.0.1:8000/api/analyze/export?format=json"
+Genera un `.xlsx` con **una fila por mensaje** (los `details` del análisis). Con
+50,000 mensajes se exportan ~45,000 filas no vacías.
+
+```python
+import httpx
+r = httpx.post("http://127.0.0.1:8000/api/analyze/folder",
+               data={"folder_path": "/ruta/a/carpeta", "optimizar_tokens": "true"})
+xr = httpx.post("http://127.0.0.1:8000/api/analyze/export", json={"details": r.json()["details"]})
+open("citas_analysis.xlsx", "wb").write(xr.content)
 ```
+
+Columnas: `Especialidad médica`, `ID paciente`, `Cluster ID`, `Mensajes en clúster`,
+`Texto original`, `Texto limpio`, `Texto en inglés`, `Acción`, `Preferencia horario`,
+`Tokens ES`, `Tokens EN`, `Tokens ahorrados/request`, `Ratio fragmentación ES/EN`,
+`Costo USD (EN)`.
 
 ## 7. Esquema de respuesta
 
 ```json
 {
   "total": 60,
+  "timings": {
+    "agrupacion": 0.008,
+    "clustering": 2.791,
+    "traduccion": 0.0,
+    "tokenizacion": 3.648,
+    "analisis": 0.467
+  },
   "results": [
     {
       "metrics": {
@@ -191,8 +221,27 @@ curl "http://127.0.0.1:8000/api/analyze/export?format=json"
         "id_paciente": "84F1EFF0",
         "especialidad_medica": "Cardiología",
         "cluster_id": 0,
-        "messages_in_cluster": 369
+        "messages_in_cluster": 369,
+        "texto_original": "Deseo solicitar la reprogramación de mi cita médica...",
+        "texto_limpio": "Deseo solicitar la reprogramación de mi cita médica...",
+        "texto_en": "I would like to request the rescheduling of my medical appointment..."
       }
+    }
+  ],
+  "details": [
+    {
+      "id_paciente": "84F1EFF0",
+      "especialidad_medica": "Cardiología",
+      "cluster_id": 0,
+      "messages_in_cluster": 369,
+      "accion": "reprogramar",
+      "preferencia_horario": "manana",
+      "texto_original": "Deseo solicitar la reprogramación de mi cita médica...",
+      "texto_limpio": "Deseo solicitar la reprogramación de mi cita médica...",
+      "texto_en": "I would like to request the rescheduling of...",
+      "tokens_es": 32,
+      "tokens_en": 24,
+      "fragmentacion_ratio": 1.3333
     }
   ]
 }
@@ -210,9 +259,15 @@ python scripts/procesar_excel_async.py   # Cliente batch (requiere backend corri
 ## 9. Notas técnicas
 
 - **Sin LLM local**: todo el procesamiento usa scikit-learn y keywords.
-- **Paralelismo**: clustering por especialidad usa `ThreadPoolExecutor`.
+- **Paralelismo**: clustering por especialidad usa `ThreadPoolExecutor`; los
+  `timings` por etapa se agregan con `max` entre grupos (≈ tiempo de pared real).
 - **CPU tuning**: `OMP_NUM_THREADS=12`, `MKL_NUM_THREADS=12`, `OPENBLAS_NUM_THREADS=12`.
 - **CORS**: abierto (`allow_origins=["*"]`).
-- **Traducción**: `deep_translator` (Google Translate) solo cuando `optimizar_tokens=True`.
+- **Traducción**: `deep_translator` (Google Translate) solo cuando `optimizar_tokens=True`
+  y únicamente para los mensajes representativos (el resto del clúster reutiliza esa
+  traducción). Hay caché en disco (`translation_cache.json`, gitignored).
 - **Compatibilidad**: el flag `optimizar_tokens` acepta `optent_tokens` como alias.
-- **Streaming**: el endpoint `/upload/stream` usa SSE para progreso en tiempo real.
+- **Streaming**: el endpoint `/upload/stream` usa SSE; los `details` se envían en lotes
+  de 500 por evento.
+- **Frontend**: el `index.html` usa **Chart.js v4** (CDN) para las gráficas de tiempos,
+  tokens, acción, horario, especialidad y fragmentación.

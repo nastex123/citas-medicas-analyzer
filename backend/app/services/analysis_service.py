@@ -11,6 +11,7 @@ import asyncio
 import io
 import json
 import os
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -34,6 +35,7 @@ from app.models.schemas import (
     AnalysisResponse,
     CitaIntent,
     ExtractedCitaData,
+    MessageDetail,
     TokenMetrics,
 )
 
@@ -129,6 +131,14 @@ def _traducir_con_cache(texto: str) -> str:
             _translation_cache[texto] = traducido
             _translation_version += 1
     return traducido
+
+
+def _limpiar_texto(texto: str) -> str:
+    """Limpia el mensaje del paciente: strip, colapsa espacios y quita emojis/símbolos."""
+    texto = texto.strip()
+    texto = re.sub(r"[\U0001F000-\U0001FAFF\u2600-\u27BF]", "", texto)
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
 
 
 def _generar_summary(texto: str, max_chars: int = 100) -> str:
@@ -249,6 +259,33 @@ def _predecir_intencion(texto: str, especialidad_col: str | None = None) -> Cita
     )
 
 
+def _predecir_intencion_lote(
+    textos: list[str],
+    especialidad_col: str | None = None,
+) -> list[CitaIntent]:
+    """Predice la intención de muchos mensajes de una vez (transform + predict en lote)."""
+    if not textos:
+        return []
+    X = _vectorizer.transform(textos)
+    accions = np.asarray(ACCION_CLASSES)[_clf_accion.predict(X)]
+    horarios = np.asarray(HORARIO_CLASSES)[_clf_horario.predict(X)]
+
+    if especialidad_col:
+        especialidad = _normalizar_especialidad(especialidad_col)
+        return [
+            CitaIntent(accion=a, especialidad=especialidad, preferencia_horario=h)
+            for a, h in zip(accions, horarios)
+        ]
+
+    intents = []
+    for texto, a, h in zip(textos, accions, horarios):
+        esp = _extraer_especialidad_texto(texto)
+        if esp == "sin_especificar":
+            esp = ESPECIALIDAD_CLASSES[_clf_especialidad.predict(_vectorizer.transform([texto]))[0]]
+        intents.append(CitaIntent(accion=a, especialidad=esp, preferencia_horario=h))
+    return intents
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Clustering semántico por especialidad
 # ──────────────────────────────────────────────────────────────────────────
@@ -298,45 +335,59 @@ def _cluster_mensajes(textos: list[str]) -> tuple[list[tuple[int, str, int, int]
 
 def _procesar_especialidad_grupo(
     esp_name: str,
-    textos_grupo: list[str],
+    textos_originales: list[str],
+    textos_limpios: list[str],
     ids_grupo: list[str],
     optimizar_tokens: bool,
-) -> tuple[list[AnalysisResponse], dict]:
+) -> tuple[list[AnalysisResponse], list[MessageDetail], dict]:
     timings = {}
 
-    if not textos_grupo:
-        return [], timings
+    if not textos_limpios:
+        return [], [], timings
 
     t0 = time.time()
-    reps, labels = _cluster_mensajes(textos_grupo)
+    reps, labels = _cluster_mensajes(textos_limpios)
     timings["clustering"] = time.time() - t0
 
-    rep_textos = [r[1] for r in reps]
+    rep_textos_limpios = [textos_limpios[r[3]] for r in reps]
+    rep_textos_originales = [textos_originales[r[3]] for r in reps]
 
     if optimizar_tokens:
         t0 = time.time()
-        rep_textos_en = _traducir_lote(rep_textos)
+        rep_textos_en = _traducir_lote(rep_textos_limpios)
         timings["traduccion"] = time.time() - t0
     else:
-        rep_textos_en = rep_textos
+        rep_textos_en = rep_textos_limpios
+
+    cluster_en = {reps[i][0]: rep_textos_en[i] for i in range(len(reps))}
+    cluster_size = {reps[i][0]: reps[i][2] for i in range(len(reps))}
 
     t0 = time.time()
+    intents_lote = _predecir_intencion_lote(textos_limpios, especialidad_col=esp_name)
+    timings_analisis = time.time() - t0
+    timings_tokenizacion = 0.0
+
     results = []
+    details = []
     for i, (cluster_id, rep_texto, n_messages, rep_idx) in enumerate(reps):
-        intent = _predecir_intencion(rep_texto, especialidad_col=esp_name)
         sum_es = _generar_summary(rep_texto)
         sum_en = _generar_summary(rep_textos_en[i])
+        intent_rep = intents_lote[rep_idx] if rep_idx < len(intents_lote) else CitaIntent()
 
+        t0 = time.time()
         if labels is not None:
-            cluster_texts = [textos_grupo[j] for j in range(len(textos_grupo)) if labels[j] == cluster_id]
+            cluster_texts = [textos_limpios[j] for j in range(len(textos_limpios)) if labels[j] == cluster_id]
             tokens_es = sum(len(_encoder.encode(t)) for t in cluster_texts)
         else:
-            tokens_es = sum(len(_encoder.encode(t)) for t in textos_grupo)
+            tokens_es = sum(len(_encoder.encode(t)) for t in textos_limpios)
 
         if optimizar_tokens:
             tokens_en = n_messages * len(_encoder.encode(rep_textos_en[i]))
         else:
             tokens_en = tokens_es
+
+        tokens_saved = max(0, tokens_es - len(_encoder.encode(rep_texto)))
+        timings_tokenizacion += time.time() - t0
 
         id_rep = ids_grupo[rep_idx] if rep_idx < len(ids_grupo) else ""
 
@@ -344,22 +395,52 @@ def _procesar_especialidad_grupo(
             metrics=TokenMetrics(
                 original_tokens=tokens_es,
                 translated_tokens=tokens_en,
-                tokens_saved_per_request=max(0, tokens_es - len(_encoder.encode(rep_texto))),
+                tokens_saved_per_request=tokens_saved,
                 fragmentacion_ratio=round(tokens_es / max(tokens_en, 1), 4),
             ),
             extracted_data=ExtractedCitaData(
-                intent=intent,
+                intent=intent_rep,
                 summary_es=sum_es,
                 summary_en=sum_en,
                 id_paciente=id_rep,
                 especialidad_medica=esp_name,
                 cluster_id=cluster_id,
                 messages_in_cluster=n_messages,
+                texto_original=rep_textos_originales[i],
+                texto_limpio=rep_texto,
+                texto_en=rep_textos_en[i],
             ),
         ))
-    timings["tiktoken"] = time.time() - t0
 
-    return results, timings
+    for j, (texto_orig, texto_limpio) in enumerate(zip(textos_originales, textos_limpios)):
+        cid = labels[j] if labels is not None else (reps[0][0] if reps else -1)
+        texto_en_msg = cluster_en.get(cid, "")
+        intent = intents_lote[j] if j < len(intents_lote) else CitaIntent()
+
+        t0 = time.time()
+        tokens_es_msg = len(_encoder.encode(texto_limpio))
+        tokens_en_msg = len(_encoder.encode(texto_en_msg)) if optimizar_tokens else tokens_es_msg
+        timings_tokenizacion += time.time() - t0
+
+        details.append(MessageDetail(
+            id_paciente=ids_grupo[j] if j < len(ids_grupo) else "",
+            especialidad_medica=esp_name,
+            cluster_id=cid,
+            messages_in_cluster=cluster_size.get(cid, 1),
+            accion=intent.accion,
+            preferencia_horario=intent.preferencia_horario,
+            texto_original=texto_orig,
+            texto_limpio=texto_limpio,
+            texto_en=texto_en_msg,
+            tokens_es=tokens_es_msg,
+            tokens_en=tokens_en_msg,
+            fragmentacion_ratio=round(tokens_es_msg / max(tokens_en_msg, 1), 4),
+        ))
+
+    timings["analisis"] = timings_analisis
+    timings["tokenizacion"] = timings_tokenizacion
+
+    return results, details, timings
 
 
 def _procesar_por_especialidad(
@@ -368,9 +449,10 @@ def _procesar_por_especialidad(
     col_especialidad: str | None,
     col_paciente: str | None,
     optimizar_tokens: bool,
-) -> tuple[list[AnalysisResponse], dict]:
+) -> tuple[list[AnalysisResponse], list[MessageDetail], dict]:
     timings = {}
     all_results = []
+    all_details = []
 
     t0 = time.time()
     if col_especialidad:
@@ -380,33 +462,38 @@ def _procesar_por_especialidad(
     timings["agrupacion"] = time.time() - t0
 
     def _preparar_grupo(name, group):
-        textos = group[col_mensaje].dropna().astype(str).str.strip()
-        textos = textos[textos.ne("")].tolist()
+        textos_originales = group[col_mensaje].dropna().astype(str).str.strip()
+        textos_originales = textos_originales[textos_originales.ne("")].tolist()
+        textos_limpios = [_limpiar_texto(t) for t in textos_originales]
         ids = group[col_paciente].astype(str).tolist() if col_paciente else [""] * len(group)
-        return name, textos, ids
+        return name, textos_originales, textos_limpios, ids
 
     items = [_preparar_grupo(name, group) for name, group in grupos]
-    items = [(n, t, i) for n, t, i in items if t]
+    items = [(n, to, tl, i) for n, to, tl, i in items if tl]
 
     with ThreadPoolExecutor(max_workers=max(1, len(items))) as pool:
         futures = [
-            pool.submit(_procesar_especialidad_grupo, name, textos, ids, optimizar_tokens)
-            for name, textos, ids in items
+            pool.submit(_procesar_especialidad_grupo, name, to, tl, ids, optimizar_tokens)
+            for name, to, tl, ids in items
         ]
         for fut in futures:
-            results_chunk, t_chunk = fut.result()
+            results_chunk, details_chunk, t_chunk = fut.result()
             all_results.extend(results_chunk)
+            all_details.extend(details_chunk)
             for k, v in t_chunk.items():
-                timings[k] = timings.get(k, 0.0) + v
+                timings[k] = max(timings.get(k, 0.0), v)
 
-    return all_results, timings
+    return all_results, all_details, timings
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # Entradas: archivo / carpeta / single
 # ──────────────────────────────────────────────────────────────────────────
 
-def procesar_archivo_excel(contents: bytes, optimizar_tokens: bool = False) -> list[AnalysisResponse]:
+def procesar_archivo_excel(
+    contents: bytes,
+    optimizar_tokens: bool = False,
+) -> tuple[list[AnalysisResponse], list[MessageDetail], dict]:
     df = pd.read_excel(io.BytesIO(contents), engine="openpyxl")
     _validar_columnas(df)
 
@@ -414,18 +501,22 @@ def procesar_archivo_excel(contents: bytes, optimizar_tokens: bool = False) -> l
     col_especialidad = _detectar_columna_especialidad(df)
     col_paciente = _detectar_columna_paciente(df)
 
-    results, _ = _procesar_por_especialidad(
+    return _procesar_por_especialidad(
         df, col_mensaje, col_especialidad, col_paciente, optimizar_tokens
     )
-    return results
 
 
-def procesar_carpeta_excel(carpeta: Path, optimizar_tokens: bool = False) -> list[AnalysisResponse]:
+def procesar_carpeta_excel(
+    carpeta: Path,
+    optimizar_tokens: bool = False,
+) -> tuple[list[AnalysisResponse], list[MessageDetail], dict]:
     archivos = list(carpeta.glob("*.xlsx")) + list(carpeta.glob("*.xls"))
     if not archivos:
         raise ValueError(f"No se encontraron archivos .xlsx en la carpeta: {carpeta}")
 
     resultados = []
+    detalles = []
+    timings = {}
     for archivo in archivos:
         df = pd.read_excel(archivo, engine="openpyxl")
         _validar_columnas(df)
@@ -434,22 +525,27 @@ def procesar_carpeta_excel(carpeta: Path, optimizar_tokens: bool = False) -> lis
         col_especialidad = _detectar_columna_especialidad(df)
         col_paciente = _detectar_columna_paciente(df)
 
-        lote, _ = _procesar_por_especialidad(
+        lote, detalle_lote, t_chunk = _procesar_por_especialidad(
             df, col_mensaje, col_especialidad, col_paciente, optimizar_tokens
         )
         resultados.extend(lote)
-    return resultados
+        detalles.extend(detalle_lote)
+        for k, v in t_chunk.items():
+            timings[k] = timings.get(k, 0.0) + v
+    return resultados, detalles, timings
 
 
 def analizar_cita(texto_es: str, optimizar_tokens: bool = False) -> AnalysisResponse:
-    intent = _predecir_intencion(texto_es)
+    texto_original = texto_es
+    texto_limpio = _limpiar_texto(texto_es)
+    intent = _predecir_intencion(texto_limpio)
 
     if optimizar_tokens:
-        texto_en = _traducir_con_cache(texto_es)
+        texto_en = _traducir_con_cache(texto_limpio)
     else:
-        texto_en = texto_es
+        texto_en = texto_limpio
 
-    tokens_es = len(_encoder.encode(texto_es))
+    tokens_es = len(_encoder.encode(texto_limpio))
     tokens_en = len(_encoder.encode(texto_en))
 
     return AnalysisResponse(
@@ -461,12 +557,15 @@ def analizar_cita(texto_es: str, optimizar_tokens: bool = False) -> AnalysisResp
         ),
         extracted_data=ExtractedCitaData(
             intent=intent,
-            summary_es=_generar_summary(texto_es),
+            summary_es=_generar_summary(texto_limpio),
             summary_en=_generar_summary(texto_en),
             id_paciente="",
             especialidad_medica=intent.especialidad,
             cluster_id=-1,
             messages_in_cluster=1,
+            texto_original=texto_original,
+            texto_limpio=texto_limpio,
+            texto_en=texto_en,
         ),
     )
 
@@ -542,7 +641,7 @@ async def procesar_archivo_excel_stream(
             df, col_mensaje, col_especialidad, col_paciente, optimizar_tokens
         )
 
-    all_results, timings = await asyncio.get_event_loop().run_in_executor(
+    all_results, all_details, timings = await asyncio.get_event_loop().run_in_executor(
         None, _do_full_processing
     )
 
@@ -553,6 +652,19 @@ async def procesar_archivo_excel_stream(
         "total": total_original,
         "processed": total_original,
     })
+
+    _DETAILS_CHUNK = 500
+    n_detalles = len(all_details)
+    for i in range(0, n_detalles, _DETAILS_CHUNK):
+        lote = all_details[i:i + _DETAILS_CHUNK]
+        yield _emit("progress", {
+            "stage": "detalle",
+            "message": f"Preparando detalle por mensaje ({min(i + _DETAILS_CHUNK, n_detalles)}/{n_detalles})...",
+            "progress": 90 + 9 * (min(i + _DETAILS_CHUNK, n_detalles) / max(n_detalles, 1)),
+            "total": total_original,
+            "processed": min(i + _DETAILS_CHUNK, n_detalles),
+            "details_batch": [d.model_dump() for d in lote],
+        })
 
     yield _emit("progress", {
         "stage": "completo",

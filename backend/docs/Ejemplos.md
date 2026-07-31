@@ -73,16 +73,47 @@ curl "http://127.0.0.1:8000/api/analyze/cost-estimate?messages_per_day=15000&opt
 curl "http://127.0.0.1:8000/api/analyze/cost-estimate?messages_per_day=15000&optimizar_tokens=false"
 ```
 
-## 6. Exportar resultados en JSON
+## 6. Exportar todas las filas a Excel (.xlsx)
 
-```bash
-curl "http://127.0.0.1:8000/api/analyze/export?format=json" > resultados.json
+El endpoint `POST /api/analyze/export` recibe los `details` (una fila por mensaje)
+devueltos por el análisis y genera el `.xlsx`:
+
+```python
+import httpx
+
+# 1) analizar la carpeta
+r = httpx.post("http://127.0.0.1:8000/api/analyze/folder",
+               data={"folder_path": "C:/Users/usuario/solicitudes",
+                     "optimizar_tokens": "true"})
+data = r.json()
+print(len(data["details"]))   # una fila por mensaje (50,000 → ~45,000 no vacíos)
+
+# 2) exportar todas las filas a .xlsx
+xr = httpx.post("http://127.0.0.1:8000/api/analyze/export", json={"details": data["details"]})
+open("citas_analysis.xlsx", "wb").write(xr.content)
 ```
 
-## 7. Exportar resultados en Excel
+El Excel contiene las columnas: `Especialidad médica`, `ID paciente`, `Cluster ID`,
+`Mensajes en clúster`, `Texto original`, `Texto limpio`, `Texto en inglés`,
+`Acción`, `Preferencia horario`, `Tokens ES`, `Tokens EN`,
+`Tokens ahorrados/request`, `Ratio fragmentación ES/EN` y `Costo USD (EN)`.
 
-```bash
-curl "http://127.0.0.1:8000/api/analyze/export?format=excel" > resultados.xlsx
+## 7. Analizar mensajes individuales y ver los nuevos campos
+
+```python
+import httpx
+
+response = httpx.post(
+    "http://127.0.0.1:8000/api/analyze",
+    json={
+        "text": "Quisiera cancelar mi cita de cardiología para la tarde. Agradezco su ayuda.",
+        "optimizar_tokens": True,
+    },
+)
+ed = response.json()["extracted_data"]
+print(ed["texto_original"])   # texto tal como llegó
+print(ed["texto_limpio"])     # texto limpio (strip, espacios colapsados, sin emojis)
+print(ed["texto_en"])         # traducción ES→EN del texto limpio
 ```
 
 ## 8. Generar datos y modelos (primera vez)
@@ -126,6 +157,13 @@ todos los endpoints directamente desde la interfaz web.
 ```json
 {
   "total": 60,
+  "timings": {
+    "agrupacion": 0.008,
+    "clustering": 2.791,
+    "traduccion": 0.0,
+    "tokenizacion": 3.648,
+    "analisis": 0.467
+  },
   "results": [
     {
       "metrics": {
@@ -145,8 +183,27 @@ todos los endpoints directamente desde la interfaz web.
         "id_paciente": "84F1EFF0",
         "especialidad_medica": "Cardiología",
         "cluster_id": 0,
-        "messages_in_cluster": 369
+        "messages_in_cluster": 369,
+        "texto_original": "Deseo solicitar la reprogramación de mi cita médica...",
+        "texto_limpio": "Deseo solicitar la reprogramación de mi cita médica...",
+        "texto_en": "I would like to request the rescheduling of my medical appointment..."
       }
+    }
+  ],
+  "details": [
+    {
+      "id_paciente": "84F1EFF0",
+      "especialidad_medica": "Cardiología",
+      "cluster_id": 0,
+      "messages_in_cluster": 369,
+      "accion": "reprogramar",
+      "preferencia_horario": "manana",
+      "texto_original": "Deseo solicitar la reprogramación de mi cita médica...",
+      "texto_limpio": "Deseo solicitar la reprogramación de mi cita médica...",
+      "texto_en": "I would like to request the rescheduling of my medical appointment...",
+      "tokens_es": 32,
+      "tokens_en": 24,
+      "fragmentacion_ratio": 1.3333
     }
   ]
 }

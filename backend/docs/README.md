@@ -16,16 +16,16 @@ médicas desde archivos Excel y evalúa la tokenización ES vs EN.
 |---|---|---|
 | `POST` | `/api/analyze` | Analizar un mensaje individual de cita médica |
 | `POST` | `/api/analyze/upload` | Subir un archivo `.xlsx` con solicitudes de pacientes |
-| `POST` | `/api/analyze/upload/stream` | Upload con progreso SSE |
+| `POST` | `/api/analyze/upload/stream` | Upload con progreso SSE (envía `details` en lotes) |
 | `POST` | `/api/analyze/folder` | Escaneo de carpeta con múltiples `.xlsx` |
-| `GET` | `/api/analyze/export` | Exportar resultados en JSON o Excel |
+| `POST` | `/api/analyze/export` | Exportar `.xlsx` con una fila por mensaje (recibe `details`) |
 | `GET` | `/api/analyze/cost-estimate` | Proyección económica (default 15,000 msgs/día) |
 
 ## Flujo de tokenización
 
 ```
-optimizar_tokens=True:  ES → deep_translator → EN → extracción de intención
-optimizar_tokens=False: ES → extracción de intención directa
+optimizar_tokens=True:  ES → limpieza → deep_translator → EN → conteo de tokens
+optimizar_tokens=False: ES → limpieza → conteo de tokens directo
 ```
 
 ## Esquema de intención extraída

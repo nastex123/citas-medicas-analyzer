@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -90,6 +91,15 @@ h2 {
 .metric-card .value { font-size: 14px; font-weight: bold; color: #fff; }
 .metric-card .value.green { color: #39ff14; }
 .metric-card .value.red { color: #ff4d4d; }
+
+.charts { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
+.chart-card {
+  flex: 1 1 46%; min-width: 340px; background: #08102e; border: 4px solid #7fb8ff;
+  box-shadow: 5px 5px 0 #000; padding: 14px;
+}
+.chart-card canvas { max-height: 280px; }
+.chart-title { color: #0ff; font-size: 9px; text-transform: uppercase; margin-bottom: 10px; }
+.chart-wrap { position: relative; height: 260px; }
 
 .progress-container {
   margin-bottom: 16px; background: #08102e; border: 4px solid #7fb8ff; padding: 16px;
@@ -204,8 +214,7 @@ tr:hover td { background: #0f1f4a; }
 
   <div class="actions">
     <button class="btn btn-primary" id="btnRun" onclick="runAnalysis()">Ejecutar análisis</button>
-    <button class="btn btn-secondary" id="btnExportJson" onclick="exportResults('json')" style="display:none;">Exportar JSON</button>
-    <button class="btn btn-secondary" id="btnExportExcel" onclick="exportResults('excel')" style="display:none;">Exportar Excel</button>
+    <button class="btn btn-secondary" id="btnExportExcel" onclick="exportResults()" style="display:none;">Exportar Excel</button>
   </div>
 
   <div id="status" class="status"></div>
@@ -247,6 +256,62 @@ tr:hover td { background: #0f1f4a; }
     </div>
   </div>
 
+  <h2>Tiempos de procesamiento</h2>
+  <div id="timings" class="metrics" style="display:none;">
+    <div class="metric-card">
+      <div class="label">Agrupación</div>
+      <div class="value" id="timingAgrupacion">-</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Clusterización</div>
+      <div class="value" id="timingCluster">-</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Traducción ES→EN</div>
+      <div class="value" id="timingTraduccion">-</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Tokenización</div>
+      <div class="value" id="timingTokenizacion">-</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Análisis de intención</div>
+      <div class="value" id="timingAnalisis">-</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Total (cliente)</div>
+      <div class="value" id="timingTotal">-</div>
+    </div>
+  </div>
+
+  <h2>Gráficas</h2>
+  <div id="charts" class="charts" style="display:none;">
+    <div class="chart-card">
+      <div class="chart-title">Tiempo por etapa</div>
+      <div class="chart-wrap"><canvas id="chartTimings"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Tokens ES vs EN por especialidad</div>
+      <div class="chart-wrap"><canvas id="chartTokens"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Acción de mensajes</div>
+      <div class="chart-wrap"><canvas id="chartAccion"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Horario preferido</div>
+      <div class="chart-wrap"><canvas id="chartHorario"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Mensajes por especialidad</div>
+      <div class="chart-wrap"><canvas id="chartEspecialidad"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Fragmentación ES/EN por grupo</div>
+      <div class="chart-wrap"><canvas id="chartFrag"></canvas></div>
+    </div>
+  </div>
+
   <h2>Resultados</h2>
   <div id="results" class="table-scroll">
     <div class="empty-state">Ejecute un análisis para ver resultados</div>
@@ -255,8 +320,10 @@ tr:hover td { background: #0f1f4a; }
 
 <script>
 let currentResults = [];
+let currentDetails = [];
 let currentMode = 'file';
 let startTime = 0;
+let chartInstances = [];
 
 function setMode(mode) {
     currentMode = mode;
@@ -318,6 +385,7 @@ function updateProgress(stage, message, progress, total, processed) {
 async function runAnalysis() {
     hideStatus();
     hideProgress();
+    currentDetails = [];
     const btn = document.getElementById('btnRun');
     btn.disabled = true;
     btn.textContent = 'Iniciando...';
@@ -365,7 +433,8 @@ async function runAnalysis() {
         } else {
             const data = await response.json();
             currentResults = data.results || [];
-            finishAnalysis(currentResults);
+            currentDetails = data.details || [];
+            finishAnalysis(currentResults, data.timings);
         }
     } catch (err) {
         hideProgress();
@@ -401,6 +470,10 @@ async function readStream(response) {
                         return;
                     }
 
+                    if (event.details_batch && event.details_batch.length) {
+                        currentDetails.push(...event.details_batch);
+                    }
+
                     updateProgress(
                         event.stage,
                         event.message,
@@ -431,8 +504,9 @@ function finishAnalysis(results, timings) {
 
     renderResults(results);
     renderMetrics(results);
+    renderTimings(timings, results);
+    renderCharts(results, timings);
 
-    document.getElementById('btnExportJson').style.display = 'inline-block';
     document.getElementById('btnExportExcel').style.display = 'inline-block';
 
     hideProgress();
@@ -508,23 +582,230 @@ function renderMetrics(results) {
     document.getElementById('metricSave').className = 'value ' + (ahorro >= 0 ? 'green' : 'red');
 }
 
-async function exportResults(format) {
+async function exportResults() {
     try {
-        const mode = currentMode === 'folder' ? 'folder' : 'file';
-        const url = `/api/analyze/export?format=${format}&optimizar_tokens=true&mode=${mode}`;
-        const response = await fetch(url);
+        const payload = currentDetails.length ? { details: currentDetails } : { results: currentResults };
+        const response = await fetch('/api/analyze/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
         if (!response.ok) throw new Error('Export failed');
 
         const blob = await response.blob();
         const urlObj = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = urlObj;
-        a.download = `citas_analysis_${Date.now()}.${format}`;
+        a.download = `citas_analysis_${Date.now()}.xlsx`;
         a.click();
         URL.revokeObjectURL(urlObj);
     } catch (err) {
         setStatus('Error al exportar: ' + err.message, 'error');
     }
+}
+
+function fmtTime(sec) {
+    if (sec === undefined || sec === null || isNaN(sec)) return '-';
+    if (sec >= 1) return sec.toFixed(2) + 's';
+    return (sec * 1000).toFixed(1) + 'ms';
+}
+
+function renderTimings(timings, results) {
+    const container = document.getElementById('timings');
+    if (!timings || typeof timings !== 'object' || !Object.keys(timings).length) {
+        container.style.display = 'none';
+        return;
+    }
+
+    const map = {
+        agrupacion: 'timingAgrupacion',
+        clustering: 'timingCluster',
+        traduccion: 'timingTraduccion',
+        tokenizacion: 'timingTokenizacion',
+        analisis: 'timingAnalisis',
+    };
+    for (const [key, id] of Object.entries(map)) {
+        document.getElementById(id).textContent = fmtTime(timings[key]);
+    }
+    document.getElementById('timingTotal').textContent =
+        ((performance.now() - startTime) / 1000).toFixed(2) + 's';
+    container.style.display = 'flex';
+}
+
+function destroyCharts() {
+    chartInstances.forEach(c => c.destroy());
+    chartInstances = [];
+}
+
+const CHART_COLORS = ['#39ff14', '#0ff', '#7fb8ff', '#ffe14d', '#ff5d8f', '#7b2ff7', '#ff4d4d', '#c8ffd8'];
+
+function chartBase() {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                labels: { color: '#c8ffd8', font: { family: "'Press Start 2P', monospace", size: 8 } },
+            },
+            tooltip: {
+                backgroundColor: '#0a1233', borderColor: '#7fb8ff', borderWidth: 2,
+                titleColor: '#0ff', bodyColor: '#c8ffd8',
+            },
+        },
+        scales: {
+            x: {
+                ticks: { color: '#7fb8ff', font: { family: "'Press Start 2P', monospace", size: 7 }, maxRotation: 45 },
+                grid: { color: '#12204d' },
+            },
+            y: {
+                ticks: { color: '#7fb8ff', font: { family: "'Press Start 2P', monospace", size: 7 } },
+                grid: { color: '#12204d' },
+            },
+        },
+    };
+}
+
+function makeChart(canvasId, config) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    chartInstances.push(new Chart(canvas.getContext('2d'), config));
+}
+
+function doughnutOptions() {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                position: 'right',
+                labels: { color: '#c8ffd8', font: { family: "'Press Start 2P', monospace", size: 8 } },
+            },
+            tooltip: {
+                backgroundColor: '#0a1233', borderColor: '#7fb8ff', borderWidth: 2,
+                titleColor: '#0ff', bodyColor: '#c8ffd8',
+            },
+        },
+    };
+}
+
+function renderCharts(results, timings) {
+    if (typeof Chart === 'undefined') return;
+    destroyCharts();
+
+    const tKeys = [
+        ['agrupacion', 'Agrupación'],
+        ['clustering', 'Clusterización'],
+        ['traduccion', 'Traducción ES→EN'],
+        ['tokenizacion', 'Tokenización'],
+        ['analisis', 'Análisis de intención'],
+    ];
+    if (timings && Object.keys(timings).length) {
+        const tLabels = tKeys.map(k => k[1]);
+        const tData = tKeys.map(k => Number(timings[k[0]]) || 0);
+        makeChart('chartTimings', {
+            type: 'bar',
+            data: {
+                labels: tLabels,
+                datasets: [{
+                    label: 'Segundos',
+                    data: tData,
+                    backgroundColor: CHART_COLORS.slice(0, tLabels.length),
+                    borderColor: '#000', borderWidth: 2,
+                }],
+            },
+            options: Object.assign({ indexAxis: 'y' }, chartBase()),
+        });
+    }
+
+    const byEspecialidad = {};
+    const accionCount = {};
+    const horarioCount = {};
+    results.forEach(r => {
+        const m = r.metrics || {};
+        const ed = r.extracted_data || r || {};
+        const intent = ed.intent || {};
+        const esp = ed.especialidad_medica || 'sin_especificar';
+        if (!byEspecialidad[esp]) byEspecialidad[esp] = { es: 0, en: 0, msgs: 0 };
+        byEspecialidad[esp].es += m.original_tokens || 0;
+        byEspecialidad[esp].en += m.translated_tokens || 0;
+        byEspecialidad[esp].msgs += ed.messages_in_cluster || 1;
+        const accion = String(intent.accion || 'otro');
+        accionCount[accion] = (accionCount[accion] || 0) + (ed.messages_in_cluster || 1);
+        const horario = String(intent.preferencia_horario || 'sin_preferencia');
+        horarioCount[horario] = (horarioCount[horario] || 0) + (ed.messages_in_cluster || 1);
+    });
+
+    const espNames = Object.keys(byEspecialidad);
+
+    if (espNames.length) {
+        makeChart('chartTokens', {
+            type: 'bar',
+            data: {
+                labels: espNames,
+                datasets: [
+                    { label: 'Tokens ES', data: espNames.map(e => byEspecialidad[e].es), backgroundColor: '#ff5d8f', borderColor: '#000', borderWidth: 2 },
+                    { label: 'Tokens EN', data: espNames.map(e => byEspecialidad[e].en), backgroundColor: '#39ff14', borderColor: '#000', borderWidth: 2 },
+                ],
+            },
+            options: chartBase(),
+        });
+
+        const sorted = espNames.slice().sort((a, b) => byEspecialidad[b].msgs - byEspecialidad[a].msgs).slice(0, 8);
+        makeChart('chartEspecialidad', {
+            type: 'bar',
+            data: {
+                labels: sorted,
+                datasets: [{ label: 'Mensajes', data: sorted.map(e => byEspecialidad[e].msgs), backgroundColor: '#7b2ff7', borderColor: '#000', borderWidth: 2 }],
+            },
+            options: chartBase(),
+        });
+    }
+
+    const accionLabels = Object.keys(accionCount);
+    if (accionLabels.length) {
+        makeChart('chartAccion', {
+            type: 'doughnut',
+            data: {
+                labels: accionLabels,
+                datasets: [{ data: accionLabels.map(a => accionCount[a]), backgroundColor: CHART_COLORS, borderColor: '#050a1f', borderWidth: 3 }],
+            },
+            options: doughnutOptions(),
+        });
+    }
+
+    const horarioLabels = Object.keys(horarioCount);
+    if (horarioLabels.length) {
+        makeChart('chartHorario', {
+            type: 'doughnut',
+            data: {
+                labels: horarioLabels,
+                datasets: [{ data: horarioLabels.map(h => horarioCount[h]), backgroundColor: CHART_COLORS, borderColor: '#050a1f', borderWidth: 3 }],
+            },
+            options: doughnutOptions(),
+        });
+    }
+
+    const fragItems = results.map(r => {
+        const ed = r.extracted_data || r || {};
+        const m = r.metrics || {};
+        return {
+            label: ed.especialidad_medica || '?',
+            msgs: ed.messages_in_cluster || 1,
+            frag: m.fragmentacion_ratio !== undefined ? m.fragmentacion_ratio : 1,
+        };
+    }).sort((a, b) => b.msgs - a.msgs).slice(0, 8);
+    if (fragItems.length) {
+        makeChart('chartFrag', {
+            type: 'bar',
+            data: {
+                labels: fragItems.map(f => f.label),
+                datasets: [{ label: 'Frag. ES/EN', data: fragItems.map(f => Number(f.frag).toFixed(3)), backgroundColor: '#ffe14d', borderColor: '#000', borderWidth: 2 }],
+            },
+            options: chartBase(),
+        });
+    }
+
+    document.getElementById('charts').style.display = 'flex';
 }
 
 function escHtml(str) {

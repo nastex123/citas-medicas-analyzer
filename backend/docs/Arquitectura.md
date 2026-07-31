@@ -55,7 +55,7 @@ backend/
 │   └── services/
 │       └── analysis_service.py    ← Lógica de negocio
 ├── data/
-│   └── citas_medicas_solicitudes.xlsx ← Dataset de ejemplo (10,000 solicitudes)
+│   └── citas_medicas_solicitudes.xlsx ← Dataset de ejemplo (50,000 solicitudes)
 ├── docs/                          ← Documentación en español
 ├── scripts/
 │   ├── generate_citas.py          ← Genera datos de prueba
@@ -102,8 +102,32 @@ backend/
     "id_paciente": "string (opcional, del Excel)",
     "especialidad_medica": "string (columna del Excel)",
     "cluster_id": -1,
-    "messages_in_cluster": 1
+    "messages_in_cluster": 1,
+    "texto_original": "string (mensaje tal como llegó)",
+    "texto_limpio": "string (mensaje limpio)",
+    "texto_en": "string (traducción ES→EN del limpio)"
   }
+}
+```
+
+### `MessageDetail`
+
+Una fila por **mensaje individual** (lo que se exporta a Excel):
+
+```json
+{
+  "id_paciente": "string",
+  "especialidad_medica": "string",
+  "cluster_id": 0,
+  "messages_in_cluster": 369,
+  "accion": "reprogramar",
+  "preferencia_horario": "manana",
+  "texto_original": "string",
+  "texto_limpio": "string",
+  "texto_en": "string",
+  "tokens_es": 32,
+  "tokens_en": 24,
+  "fragmentacion_ratio": 1.3333
 }
 ```
 
@@ -112,9 +136,21 @@ backend/
 ```json
 {
   "total": 60,
-  "results": [AnalysisResponse, ...]
+  "timings": {
+    "agrupacion": 0.008,
+    "clustering": 2.791,
+    "traduccion": 0.0,
+    "tokenizacion": 3.648,
+    "analisis": 0.467
+  },
+  "results": [AnalysisResponse, ...],
+  "details": [MessageDetail, ...]
 }
 ```
+
+`timings` se agrega con el **máximo entre las especialidades** que corren en
+paralelo (≈ tiempo de pared real de cada fase), para que ninguna etapa supere al
+tiempo total medido en el cliente.
 
 ## Flujo de análisis
 
@@ -125,28 +161,41 @@ backend/
 2. pandas + openpyxl leen y validan columnas (_validar_columnas)
    → columna de mensaje (mensaje_texto), especialidad (especialidad_medica),
      id de paciente (id_paciente) [todas opcionales con heurística]
-3. groupby('especialidad_medica') → grupos por especialidad
-4. Por cada especialidad (ThreadPoolExecutor paralelo):
+3. Limpieza de mensajes (_limpiar_texto): strip, colapsa espacios, quita emojis
+4. groupby('especialidad_medica') → grupos por especialidad
+5. Por cada especialidad (ThreadPoolExecutor paralelo):
    ├─ TfidfVectorizer(max_features=500, ngram_range=(1,2)) + MiniBatchKMeans(k=5)
    ├─ Representante = mensaje más cercano al centroide
-   ├─ Extracción de intención (HashingVectorizer + LinearSVC + keywords)
-   └─ Conteo de tokens de todo el cluster (tiktoken o200k_base)
-5. optimizar_tokens=True → deep_translator ES→EN para summary_en y tokens EN
-6. Se devuelve BatchAnalysisResponse con métricas y datos extraídos
+   ├─ Extracción de intención en lote (_predecir_intencion_lote): un solo
+   │  transform + predict para todos los mensajes del grupo
+   ├─ Conteo de tokens de todo el cluster (tiktoken o200k_base)
+   └─ Se generan los details: una fila por mensaje (intención + tokens ES reales
+      y tokens EN del representativo del clúster)
+6. optimizar_tokens=True → deep_translator ES→EN para summary_en y tokens EN
+   (solo se traducen los representativos; el resto del clúster usa esa traducción)
+7. Se devuelve BatchAnalysisResponse con metrics, timings y details
 ```
 
 ### Modo carpeta (`/folder`)
 
 Igual que archivo pero consolida todos los `.xlsx` de la carpeta en un único
-DataFrame antes del agrupado por especialidad.
+DataFrame antes del agrupado por especialidad. Los archivos se procesan en
+secuencia y sus `timings` se acumulan (suma).
 
 ### Modo individual (`/analyze`)
 
-1. `tiktoken` cuenta tokens del texto ES.
-2. `_predecir_intencion()`: si `optimizar_tokens=True`, traduce ES→EN y usa el
-   texto EN; si es `false`, usa el texto ES. Extrae `accion`, `especialidad`
-   (keywords primero, modelo como respaldo) y `preferencia_horario`.
-3. Si `optimizar_tokens=True`: `fragmentacion_ratio = tokens_es / tokens_en`.
+1. `_limpiar_texto()` limpia el texto (strip, espacios colapsados, sin emojis).
+2. `_predecir_intencion()`: extrae `accion`, `especialidad` (keywords primero,
+   modelo como respaldo) y `preferencia_horario`.
+3. Si `optimizar_tokens=True`: traduce el texto limpio ES→EN, cuenta tokens y
+   calcula `fragmentacion_ratio = tokens_es / tokens_en`.
+
+## Frontend (gráficas)
+
+El frontend (`frontend/index.html`) usa **Chart.js v4** (CDN) para mostrar:
+tiempos por etapa, tokens ES vs EN por especialidad, acción y horario (doughnut),
+mensajes por especialidad y fragmentación por grupo. Los `timings` y `details`
+se envían desde el backend para alimentar las tarjetas y el export `.xlsx`.
 
 ## Detección de columnas
 

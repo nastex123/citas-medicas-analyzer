@@ -43,13 +43,20 @@ Analiza un mensaje individual de solicitud de cita médica.
     "id_paciente": "",
     "especialidad_medica": "cardiologia",
     "cluster_id": -1,
-    "messages_in_cluster": 1
+    "messages_in_cluster": 1,
+    "texto_original": "Deseo solicitar la reprogramación de mi cita médica con el cardiólogo...",
+    "texto_limpio": "Deseo solicitar la reprogramación de mi cita médica con el cardiólogo...",
+    "texto_en": "I would like to request the rescheduling of my medical appointment..."
   }
 }
 ```
 
 `fragmentacion_ratio` = tokens ES / tokens EN. >1 significa que el español
 fragmenta más (más tokens) que el inglés.
+
+> `texto_limpio` es el mensaje tras la limpieza (strip, espacios colapsados y sin
+> emojis). Cuando `optimizar_tokens=True`, `texto_en` es la traducción ES→EN del
+> texto limpio y los tokens se cuentan sobre ese texto.
 
 ### Errores
 
@@ -85,6 +92,13 @@ curl -X POST http://127.0.0.1:8000/api/analyze/upload \
 ```json
 {
   "total": 60,
+  "timings": {
+    "agrupacion": 0.008,
+    "clustering": 2.791,
+    "traduccion": 0.0,
+    "tokenizacion": 3.648,
+    "analisis": 0.467
+  },
   "results": [
     {
       "metrics": {
@@ -100,12 +114,39 @@ curl -X POST http://127.0.0.1:8000/api/analyze/upload \
         "id_paciente": "84F1EFF0",
         "especialidad_medica": "Cardiología",
         "cluster_id": 0,
-        "messages_in_cluster": 369
+        "messages_in_cluster": 369,
+        "texto_original": "Deseo solicitar la reprogramación de mi cita médica...",
+        "texto_limpio": "Deseo solicitar la reprogramación de mi cita médica...",
+        "texto_en": "Deseo solicitar la reprogramación de mi cita médica..."
       }
+    }
+  ],
+  "details": [
+    {
+      "id_paciente": "84F1EFF0",
+      "especialidad_medica": "Cardiología",
+      "cluster_id": 0,
+      "messages_in_cluster": 369,
+      "accion": "reprogramar",
+      "preferencia_horario": "manana",
+      "texto_original": "Deseo solicitar la reprogramación de mi cita médica...",
+      "texto_limpio": "Deseo solicitar la reprogramación de mi cita médica...",
+      "texto_en": "I would like to request the rescheduling of my medical appointment...",
+      "tokens_es": 32,
+      "tokens_en": 24,
+      "fragmentacion_ratio": 1.3333
     }
   ]
 }
 ```
+
+- `results`: un elemento por **grupo representativo** (clúster) con métricas agregadas.
+- `details`: una entrada por **mensaje individual** (misma estructura de columnas que
+  el export). Con un archivo de 50,000 mensajes, `details` contiene ~45,000 filas
+  (los mensajes vacíos se descartan).
+- `timings`: tiempo por etapa (segundos), agregado como **máximo entre las
+  especialidades** que se procesan en paralelo (≈ tiempo de pared real de la fase):
+  `agrupacion`, `clustering`, `traduccion`, `tokenizacion`, `analisis`.
 
 > El endpoint valida automáticamente que exista una columna de mensaje
 > (`mensaje_texto` o similar); si no la encuentra responde `400`.
@@ -132,14 +173,27 @@ Eventos emitidos:
 
 ```
 event: progress
-data: {"stage": "lectura", "message": "Archivo leído: 10000 mensajes", "progress": 3, "total": 10000, "processed": 0}
+data: {"stage": "lectura", "message": "Archivo leído: 50000 mensajes", "progress": 3, "total": 50000, "processed": 0}
 
 event: progress
 data: {"stage": "clustering", "message": "Agrupando por especialidad médica (12 especialidades)...", "progress": 8}
 
 event: progress
-data: {"stage": "completo", "message": "Completado: 10000 mensajes → 60 grupos representativos", "progress": 100, "results": [...], "timings": {...}}
+data: {"stage": "clasificacion", "message": "Extrayendo intención de 60 representantes...", "progress": 90}
+
+event: progress
+data: {"stage": "detalle", "message": "Preparando detalle por mensaje (500/45024)...", "progress": 90.1, "details_batch": [ { ...MessageDetail... } ]}
+
+event: progress
+data: {"stage": "detalle", "message": "Preparando detalle por mensaje (45024/45024)...", "progress": 99.0, "details_batch": [...]}
+
+event: progress
+data: {"stage": "completo", "message": "Completado: 50000 mensajes → 60 grupos representativos", "progress": 100, "results": [...], "timings": {...}}
 ```
+
+- Los `details` se envían en **lotes de 500 por evento** (`details_batch`) para no
+  emitir una línea SSE gigante con todas las filas.
+- El evento `completo` cierra el flujo con `results` (representativos) y `timings`.
 
 ---
 
@@ -164,6 +218,9 @@ curl -X POST http://127.0.0.1:8000/api/analyze/folder \
   -F "optimizar_tokens=true"
 ```
 
+Respuesta con la misma estructura que `/api/analyze/upload` (`total`, `results`,
+`timings` y `details`). Los archivos se procesan en secuencia y sus tiempos se acumulan.
+
 ### Errores
 
 | Código | Descripción |
@@ -172,24 +229,64 @@ curl -X POST http://127.0.0.1:8000/api/analyze/folder \
 
 ---
 
-## `GET /api/analyze/export`
+## `POST /api/analyze/export`
 
-Exporta resultados en formato JSON o Excel.
+Genera un archivo **`.xlsx`** con **una fila por mensaje** (los mismos datos de
+`details` devueltos por el análisis).
 
-### Parámetros de consulta
+### Cuerpo de la petición
 
-| Parámetro | Tipo | Requerido | Descripción |
-|---|---|---|---|
-| `format` | `string` | Sí | `json` o `excel` |
-| `optimizar_tokens` | boolean | No | Filtro por modo de procesamiento |
-
-### Ejemplo
-
-```bash
-curl "http://127.0.0.1:8000/api/analyze/export?format=json"
+```json
+{
+  "details": [ { ...MessageDetail... } ]
+}
 ```
 
----
+Si `details` no se envía, acepta `results` (representativos) como alternativa.
+
+### Ejemplo con Python
+
+```python
+import httpx
+
+# 1) analizar la carpeta/archivo
+r = httpx.post("http://127.0.0.1:8000/api/analyze/folder",
+               data={"folder_path": "solicitudes", "optimizar_tokens": "true"})
+details = r.json()["details"]
+
+# 2) exportar todas las filas a .xlsx
+xr = httpx.post("http://127.0.0.1:8000/api/analyze/export", json={"details": details})
+open("citas_analysis.xlsx", "wb").write(xr.content)
+```
+
+### Columnas del Excel
+
+| Columna | Descripción |
+|---|---|
+| `Especialidad médica` | Especialidad del mensaje |
+| `ID paciente` | Identificador del paciente |
+| `Cluster ID` | Clúster asignado |
+| `Mensajes en clúster` | Tamaño del clúster |
+| `Texto original` | Mensaje tal como llegó del Excel |
+| `Texto limpio` | Mensaje tras la limpieza |
+| `Texto en inglés` | Traducción del representativo del clúster (ES→EN) |
+| `Acción` | `reprogramar` / `cancelar` / `confirmar` / `otro` |
+| `Preferencia horario` | `manana` / `tarde` / `noche` / `sin_preferencia` |
+| `Tokens ES` | Tokens del texto limpio (o200k_base) |
+| `Tokens EN` | Tokens de la versión en inglés (representativo del clúster) |
+| `Tokens ahorrados/request` | `max(0, tokens_es - tokens_en)` |
+| `Ratio fragmentación ES/EN` | `tokens_es / tokens_en` |
+| `Costo USD (EN)` | `(tokens_en / 1_000_000) * 2.50` |
+
+> Con `optimizar_tokens=True` el texto en inglés es la traducción del mensaje
+> **representativo** de cada clúster, que se aplica a todos sus miembros (evita
+> traducir los 50,000 mensajes individuales).
+
+### Errores
+
+| Código | Descripción |
+|---|---|
+| `400` | No se enviaron `details` ni `results` |
 
 ## `GET /api/analyze/cost-estimate`
 

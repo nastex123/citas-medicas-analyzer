@@ -7,13 +7,22 @@ Aquí NO va lógica de negocio: solo se valida la petición
 y se delega el trabajo real al servicio (app/services/analysis_service.py).
 """
 
+import io
+import time
 from pathlib import Path
 
+import pandas as pd
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.core.config import MENSAJES_POR_DIA_DEFAULT, PRICE_PER_MILLION_TOKENS_USD
-from app.models.schemas import AnalysisResponse, BatchAnalysisResponse, CitaRequest
+from app.models.schemas import (
+    AnalysisResponse,
+    BatchAnalysisResponse,
+    CitaRequest,
+    ExportRequest,
+    MessageDetail,
+)
 from app.services.analysis_service import (
     analizar_cita,
     procesar_archivo_excel,
@@ -49,8 +58,13 @@ async def analyze_upload(
 
     contents = await file.read()
     flag = _flag(optimizar_tokens, optent_tokens)
-    results = procesar_archivo_excel(contents, optimizar_tokens=flag)
-    return BatchAnalysisResponse(total=len(results), results=results)
+    results, details, timings = procesar_archivo_excel(contents, optimizar_tokens=flag)
+    return BatchAnalysisResponse(
+        total=len(results),
+        results=results,
+        timings=timings,
+        details=details,
+    )
 
 
 @router.post("/analyze/upload/stream")
@@ -86,23 +100,81 @@ async def analyze_folder(
 
     flag = _flag(optimizar_tokens, optent_tokens)
     try:
-        results = procesar_carpeta_excel(path, optimizar_tokens=flag)
+        results, details, timings = procesar_carpeta_excel(path, optimizar_tokens=flag)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return BatchAnalysisResponse(total=len(results), results=results)
+    return BatchAnalysisResponse(
+        total=len(results),
+        results=results,
+        timings=timings,
+        details=details,
+    )
 
 
-@router.get("/analyze/export")
-async def export_results(
-    format: str = "json",
-    optimizar_tokens: bool = False,
-) -> dict:
-    return {
-        "format": format,
-        "note": "Export endpoint requires prior batch processing via /api/analyze/upload or /api/analyze/folder",
-        "supported_formats": ["json", "excel"],
-        "schema": {"accion": "reprogramar", "especialidad": "cardiologia", "preferencia_horario": "manana"},
-    }
+def _generar_excel_export(details: list) -> bytes:
+    """Construye el .xlsx con una fila por mensaje: parámetros, mensajes ES/limpio/EN y tokens."""
+    filas = []
+    for d in details:
+        costo_en = (d.tokens_en / 1_000_000) * PRICE_PER_MILLION_TOKENS_USD
+        filas.append({
+            "Especialidad médica": d.especialidad_medica,
+            "ID paciente": d.id_paciente,
+            "Cluster ID": d.cluster_id,
+            "Mensajes en clúster": d.messages_in_cluster,
+            "Texto original": d.texto_original,
+            "Texto limpio": d.texto_limpio,
+            "Texto en inglés": d.texto_en,
+            "Acción": d.accion,
+            "Preferencia horario": d.preferencia_horario,
+            "Tokens ES": d.tokens_es,
+            "Tokens EN": d.tokens_en,
+            "Tokens ahorrados/request": max(0, d.tokens_es - d.tokens_en),
+            "Ratio fragmentación ES/EN": d.fragmentacion_ratio,
+            "Costo USD (EN)": round(costo_en, 4),
+        })
+
+    df = pd.DataFrame(filas)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Análisis")
+    return buf.getvalue()
+
+
+@router.post("/analyze/export")
+async def export_results(payload: ExportRequest) -> StreamingResponse:
+    if payload.details:
+        detalle_export = payload.details
+    elif payload.results:
+        detalle_export = [
+            MessageDetail(
+                id_paciente=ed.id_paciente,
+                especialidad_medica=ed.especialidad_medica,
+                cluster_id=ed.cluster_id,
+                messages_in_cluster=ed.messages_in_cluster,
+                accion=ed.intent.accion,
+                preferencia_horario=ed.intent.preferencia_horario,
+                texto_original=ed.texto_original,
+                texto_limpio=ed.texto_limpio,
+                texto_en=ed.texto_en,
+                tokens_es=m.original_tokens,
+                tokens_en=m.translated_tokens,
+                fragmentacion_ratio=m.fragmentacion_ratio,
+            )
+            for r in payload.results
+            for ed, m in [(r.extracted_data, r.metrics)]
+        ]
+    else:
+        raise HTTPException(status_code=400, detail="No hay datos para exportar.")
+
+    contenido = _generar_excel_export(detalle_export)
+    nombre = f"citas_analysis_{int(time.time())}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(contenido),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{nombre}"',
+        },
+    )
 
 
 def _estimar_tokens_por_mensaje(optimizar_tokens: bool) -> dict:

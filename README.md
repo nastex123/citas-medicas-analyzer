@@ -13,10 +13,13 @@ Más información en [backend/docs/](backend/docs/) (instalación, API, arquitec
 |---|---|---|
 | `POST` | `/api/analyze` | Analizar un mensaje individual de cita médica |
 | `POST` | `/api/analyze/upload` | Subir un archivo `.xlsx` con solicitudes de pacientes |
-| `POST` | `/api/analyze/upload/stream` | Upload con progreso SSE |
+| `POST` | `/api/analyze/upload/stream` | Upload con progreso SSE (envía `details` en lotes) |
 | `POST` | `/api/analyze/folder` | Escaneo de carpeta con múltiples `.xlsx` |
-| `GET` | `/api/analyze/export` | Exportar resultados en JSON o Excel |
+| `POST` | `/api/analyze/export` | Exportar `.xlsx` con una fila por mensaje (recibe `details`) |
 | `GET` | `/api/analyze/cost-estimate` | Proyección económica (default 15,000 msgs/día) |
+
+El frontend muestra tiempos por etapa y gráficas (Chart.js) y permite exportar el
+`.xlsx` completo (una fila por mensaje).
 
 ## Flujo de tokenización
 
