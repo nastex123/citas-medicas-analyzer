@@ -40,5 +40,5 @@ RAINBOW_COLORS = [
 
 BANNER_RESET = "\033[0m"
 
-_fig = Figlet(font="big")
+_fig = Figlet(font="ansi_shadow")
 GEOXOR_BANNER_LINES = _fig.renderText("Geoxor").splitlines()
