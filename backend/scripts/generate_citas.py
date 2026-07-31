@@ -52,6 +52,24 @@ def generar_citas_excel(
         "Quisiera saber si hay posibilidad de adelantar mi turno médico por motivos de urgencia no vital.",
     ]
 
+    FRASES_EXTRA = [
+        "Le agradezco de antemano por su atención a esta solicitud.",
+        "Necesito confirmación de disponibilidad para esa fecha.",
+        "Quedo atento a su respuesta y a la nueva asignación.",
+        "Agradezco la ayuda y quedo a la espera de la confirmación.",
+        "Por favor, indiquenme los pasos a seguir para concretar el cambio.",
+        "Espero que puedan resolver mi solicitud a la brevedad.",
+        "Aprecio su apoyo para gestionar esta situación.",
+        "Estoy disponible para cualquier aclaración que necesiten.",
+        "Les agradezco por comunicarse conmigo cuando sea posible.",
+        "Solicito que me notifiquen al correo registrado.",
+        "Quedo a disposición para brindar más información si es requerida.",
+        "Agradezco su comprensión ante esta situación.",
+        "Requiero una respuesta pronta para organizar mi agenda.",
+        "Agradezco la atención que puedan prestar a este asunto.",
+        "Espero su confirmación para poder coordinar mis actividades.",
+    ]
+
     data = []
 
     for _ in range(num_filas):
@@ -66,7 +84,7 @@ def generar_citas_excel(
             mensaje_texto = ""
         else:
             mensaje_texto = (
-                f"{random.choice(plantillas_mensajes)} {fake.sentence(nb_words=8)}"
+                f"{random.choice(plantillas_mensajes)} {random.choice(FRASES_EXTRA)}"
             )
 
         data.append(

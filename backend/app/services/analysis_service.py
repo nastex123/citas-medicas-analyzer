@@ -11,6 +11,7 @@ import asyncio
 import io
 import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -74,6 +75,61 @@ _K_FIXO = 5
 
 _translator_pool = ThreadPoolExecutor(max_workers=6)
 
+# ──────────────────────────────────────────────────────────────────────────
+# Caché de traducciones ES→EN (mismo texto → mismo resultado, evita que la
+# API de Google devuelva variaciones entre ejecuciones).
+# ──────────────────────────────────────────────────────────────────────────
+_translation_cache: dict[str, str] = {}
+_translation_lock = threading.Lock()
+_translation_version = 0
+_translation_saved_version = 0
+_CACHE_FILE = Path(__file__).resolve().parent / "translation_cache.json"
+
+
+def _cargar_cache_traducciones() -> None:
+    global _translation_cache
+    try:
+        if _CACHE_FILE.is_file():
+            with open(_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                _translation_cache = {str(k): str(v) for k, v in data.items()}
+    except Exception:
+        _translation_cache = {}
+
+
+def _guardar_cache_traducciones() -> None:
+    try:
+        tmp = _CACHE_FILE.with_name(_CACHE_FILE.name + ".tmp")
+        with _translation_lock:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(_translation_cache, f, ensure_ascii=False, indent=1)
+        tmp.replace(_CACHE_FILE)
+    except Exception:
+        pass
+
+
+_cargar_cache_traducciones()
+
+_translator_es_en = GoogleTranslator(source="es", target="en")
+
+
+def _traducir_con_cache(texto: str) -> str:
+    """Traduce ES→EN usando la caché; guarda el resultado para futuras llamadas."""
+    global _translation_version
+    with _translation_lock:
+        if texto in _translation_cache:
+            return _translation_cache[texto]
+    try:
+        traducido = _translator_es_en.translate(texto)
+    except Exception:
+        return texto
+    with _translation_lock:
+        if texto not in _translation_cache:
+            _translation_cache[texto] = traducido
+            _translation_version += 1
+    return traducido
+
 
 def _generar_summary(texto: str, max_chars: int = 100) -> str:
     texto = texto.strip()
@@ -89,8 +145,15 @@ def _generar_summary(texto: str, max_chars: int = 100) -> str:
 
 
 def _traducir_lote(textos: list[str]) -> list[str]:
-    translator = GoogleTranslator(source="es", target="en")
-    return list(_translator_pool.map(translator.translate, textos))
+    global _translation_saved_version
+    resultados = list(_translator_pool.map(_traducir_con_cache, textos))
+    with _translation_lock:
+        hay_nuevos = _translation_version != _translation_saved_version
+        if hay_nuevos:
+            _translation_saved_version = _translation_version
+    if hay_nuevos:
+        _guardar_cache_traducciones()
+    return resultados
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -252,8 +315,7 @@ def _procesar_especialidad_grupo(
 
     if optimizar_tokens:
         t0 = time.time()
-        translator = GoogleTranslator(source="es", target="en")
-        rep_textos_en = list(_translator_pool.map(translator.translate, rep_textos))
+        rep_textos_en = _traducir_lote(rep_textos)
         timings["traduccion"] = time.time() - t0
     else:
         rep_textos_en = rep_textos
@@ -383,8 +445,7 @@ def analizar_cita(texto_es: str, optimizar_tokens: bool = False) -> AnalysisResp
     intent = _predecir_intencion(texto_es)
 
     if optimizar_tokens:
-        translator = GoogleTranslator(source="es", target="en")
-        texto_en = translator.translate(texto_es)
+        texto_en = _traducir_con_cache(texto_es)
     else:
         texto_en = texto_es
 

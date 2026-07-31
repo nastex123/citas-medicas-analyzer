@@ -16,6 +16,9 @@ env/
 # Modelos entrenados (se regeneran con scripts/train_pipeline.py)
 *.joblib
 
+# Caché de traducciones ES→EN
+translation_cache.json
+
 # OS
 Thumbs.db
 .DS_Store
