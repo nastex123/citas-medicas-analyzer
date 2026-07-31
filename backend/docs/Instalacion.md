@@ -82,6 +82,18 @@ python scripts/train_pipeline.py
 1. `generate_citas.py` genera `data/citas_medicas_solicitudes.xlsx` (10,000 solicitudes de pacientes).
 2. `train_pipeline.py` entrena y guarda los 3 clasificadores + vectorizer en `app/models/`.
 
+### Regenerar el archivo `.xlsx` (`generate_citas.py`)
+
+```powershell
+python scripts/generate_citas.py             # 10,000 solicitudes (default)
+python scripts/generate_citas.py 20000       # volumen personalizado (ej. 20,000)
+```
+
+- **Salida**: `backend/data/citas_medicas_solicitudes.xlsx` (sobrescribe el archivo si ya existe).
+- **Requiere**: `faker` y `pandas` (ya incluidos en `requirements.txt`).
+- **Columnas**: `id_paciente`, `paciente`, `ciudad`, `especialidad_medica`, `fecha_solicitada`, `mensaje_texto`.
+- El 10% de los mensajes se genera vacío (dato sucio intencional para probar tolerancia).
+
 ## Paso 4: Levantar el backend
 
 Con el venv activado, desde la carpeta `backend/`:

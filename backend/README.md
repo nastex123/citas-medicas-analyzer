@@ -84,10 +84,26 @@ pip install -r requirements.txt
 
 ## 4. Generar datos y modelos (solo la primera vez)
 
+Con el venv activo, desde la carpeta `backend/`:
+
 ```powershell
 python scripts/generate_citas.py        # Genera data/citas_medicas_solicitudes.xlsx
 python scripts/train_pipeline.py        # Entrena y guarda los 3 modelos + vectorizer
 ```
+
+### Regenerar el archivo `.xlsx` (`generate_citas.py`)
+
+`generate_citas.py` genera solicitudes de citas médicas ficticias para pruebas:
+
+```powershell
+python scripts/generate_citas.py             # 10,000 solicitudes (default)
+python scripts/generate_citas.py 20000       # volumen personalizado (ej. 20,000)
+```
+
+- **Salida**: `backend/data/citas_medicas_solicitudes.xlsx` (sobrescribe el archivo si ya existe).
+- **Requiere**: `faker` y `pandas` (ya incluidos en `requirements.txt`).
+- **Columnas**: `id_paciente`, `paciente`, `ciudad`, `especialidad_medica`, `fecha_solicitada`, `mensaje_texto`.
+- El 10% de los mensajes se genera vacío (dato sucio intencional para probar tolerancia).
 
 ## 5. Levantar el backend
 
@@ -183,6 +199,8 @@ curl "http://127.0.0.1:8000/api/analyze/export?format=json"
 ```
 
 ## 8. Datos de prueba
+
+Para regenerar el archivo de datos, ver [Sección 4](#4-generar-datos-y-modelos-solo-la-primera-vez).
 
 ```bash
 python scripts/generate_citas.py         # Genera data/citas_medicas_solicitudes.xlsx

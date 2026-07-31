@@ -93,6 +93,17 @@ python scripts/generate_citas.py        # data/citas_medicas_solicitudes.xlsx
 python scripts/train_pipeline.py        # app/models/*.joblib
 ```
 
+### Regenerar el `.xlsx` con otro volumen
+
+```bash
+python scripts/generate_citas.py             # 10,000 solicitudes (default)
+python scripts/generate_citas.py 20000       # volumen personalizado (ej. 20,000)
+```
+
+El script escribe en `data/citas_medicas_solicitudes.xlsx` (sobrescribe si existe).
+Columnas generadas: `id_paciente`, `paciente`, `ciudad`, `especialidad_medica`,
+`fecha_solicitada`, `mensaje_texto`. Requiere `faker` y `pandas`.
+
 ## 9. Cliente batch
 
 Con el backend corriendo en otra terminal:
