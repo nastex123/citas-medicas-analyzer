@@ -1,0 +1,83 @@
+PITCH NO TECNICO — GESTION DE CITAS MEDICAS ANALYZER
+
+1. El problema de todos los dias
+
+Imagina un centro de salud que recibe miles de mensajes por dia de pacientes que quieren cambiar, cancelar o confirmar sus citas. Mensajes como este:
+
+"Deseo solicitar la reprogramacion de mi cita medica con el cardiologo para la proxima semana en el horario de la manana."
+
+Leer cada mensaje, entender que quiere el paciente (¿reprogramar? ¿cancelar?), con que medico (¿cardiologo? ¿pediatra?) y a que horario (¿manana? ¿tarde?) lleva tiempo y personal. Y cuando son 15.000 mensajes diarios, ese trabajo se convierte en un cuello de botella: pacientes que esperan, errores humanos y personal ocupado en tareas repetitivas.
+
+Este proyecto nace para resolver exactamente eso.
+
+2. Que hace el sistema
+
+"Gestion de Citas Medicas Analyzer" es un sistema que lee esas solicitudes por nosotros. Toma el archivo de Excel donde el centro guarda todos los pedidos de los pacientes y, mensaje por mensaje, es capaz de entender:
+
+- Que accion quiere el paciente: reprogramar, cancelar o confirmar la cita.
+- Con que especialidad: cardiologia, pediatria, dermatologia, etc. (13 especialidades).
+- A que horario prefiere: manana, tarde o noche.
+
+El resultado es un archivo nuevo, ordenado y listo para usar: una fila por cada paciente, con su pedido ya "clasificado". Es como si un recepcionista leyera los 15.000 mensajes y dejara una planilla resumida, pero en segundos y sin equivocarse.
+
+3. Como funciona, paso a paso (en palabras simples)
+
+Pensemos en el sistema como un equipo de recepcionistas automaticos que trabajan en cadena.
+
+Paso 1 — Recibir las solicitudes. El centro sube su archivo de Excel (o el sistema mira una carpeta entera donde se van dejando los archivos). No importa el formato exacto de las columnas: el sistema las reconoce por si solo.
+
+Paso 2 — Ordenar por especialidad. Los mensajes se separan en montones segun el tipo de medico que mencionan: los que hablan del cardiologo van en un monton, los del pediatra en otro. Asi el trabajo se reparte en paralelo, como varios recepcionistas atendiendo cada uno su propio mostrador.
+
+Paso 3 — Agrupar mensajes parecidos. Dentro de cada especialidad, el sistema junta los mensajes que se parecen mucho entre si (por ejemplo, todos los que dicen "reprogramar en la manana"). De cada grupo, se queda con un solo mensaje de ejemplo para analizarlo. Con 50.000 solicitudes, esto reduce todo a unos 60 grupos representativos. Es el mismo truco de "no leas los 500 correos parecidos, lee uno y aplica la respuesta a todos".
+
+Paso 4 — Entender el mensaje. Sobre cada grupo representativo, el sistema extrae la informacion clave: la accion (reprogramar/cancelar/confirmar), la especialidad y el horario preferido. Y esa misma respuesta se aplica a todos los mensajes de ese grupo.
+
+Paso 5 — Medir los costos (la parte importante). Cuando la opcion esta activada, el sistema traduce el mensaje de ejemplo al ingles solo para comparar cuanto "cuesta leerlo" en cada idioma. El resultado se guarda en un informe: cuantos tokens (unidades que la inteligencia artificial cobra) consume el espanol versus el ingles.
+
+Paso 6 — Mostrar los resultados. Todo se ve en una pagina web con graficos, barras de progreso en vivo y un boton para descargar el Excel final con cada paciente ya clasificado.
+
+4. El descubrimiento que ahorra dinero
+
+Aqui esta el corazon del proyecto, y se explica asi:
+
+Los sistemas de inteligencia artificial cobran por la cantidad de texto que leen. Ese texto se mide en unidades llamadas tokens (imaginalos como "pedacitos de palabras"). A mas tokens, mas caro.
+
+Y ocurre algo curioso con el espanol medico: palabras largas y formales como "reprogramacion" o "cardiologia" se parten en muchos pedacitos cuando la maquina las lee. En ingles, esas mismas ideas ocupan menos pedacitos.
+
+Este sistema mide exactamente esa diferencia y responde una pregunta de negocios concreta:
+
+"¿Me conviene procesar los mensajes directamente en espanol, o traducirlos al ingles primero para gastar menos en inteligencia artificial?"
+
+Con el estimador de costos, en un clic podes ver el ahorro proyectado para el volumen real del centro. Por ejemplo, con 15.000 mensajes por dia y una tarifa de 2,50 dolares por cada millon de tokens:
+
+- Por dia: el costo en espanol es mas alto y el costo en ingles mas bajo, con una diferencia medible.
+- Por mes (30 dias): la diferencia se nota.
+- Por ano (365 dias): la diferencia se nota mucho.
+
+La respuesta a esa pregunta no es la misma para todos: depende del tipo de vocabulario que use cada centro. Este sistema entrega datos reales, medidos con tus propios mensajes, para decidir la estrategia con numeros en la mano y no a ciegas.
+
+5. La pantalla (como se ve)
+
+Quien use el sistema no necesita saber de codigo. La interfaz web incluye:
+
+- Dos modos de carga: arrastrar un archivo Excel, o indicar una carpeta entera para procesar todos los archivos que contenga.
+- Una casilla "optimizar tokens": al activarla, el sistema hace la comparacion de costos espanol versus ingles. Es opcional.
+- Barra de progreso en vivo: muestra por que etapa va el proceso (leyendo archivo, agrupando mensajes, clasificando, terminado).
+- Tarjetas con las metricas clave: tokens en espanol, tokens en ingles, costo estimado, ahorro y fragmentacion.
+- Graficos (de torta y de barras) que resumen los resultados: que acciones pidieron los pacientes, a que horarios, por especialidad, y la comparacion de costos entre idiomas.
+- Tabla de resultados con el detalle de cada paciente.
+- Boton de exportar: descarga el Excel final con una fila por mensaje, listo para entregar o importar a otro sistema.
+
+6. Para que sirve en la practica
+
+- Ahorro de tiempo: procesar 50.000 solicitudes en segundos, en lugar de dias de trabajo manual.
+- Decision de costos con datos: saber con certeza si conviene (o no) pagar por traduccion previa antes de enviar los mensajes a la inteligencia artificial.
+- Menos errores: la clasificacion es consistente y se puede auditar.
+- Orden y trazabilidad: cada paciente tiene su fila con el pedido ya entendido, exportable a Excel.
+- Escalable: funciona con un archivo chico o con una carpeta llena de archivos grandes.
+
+7. En tres frases
+
+1. Es un "recepcionista automatico" que lee los mensajes de los pacientes y los deja clasificados (que quiere, con que medico, a que horario) en un Excel.
+2. Ademas mide cuanto cuesta que la inteligencia artificial lea cada idioma, y calcula el ahorro de traducir antes de procesar.
+3. Todo se opera desde una pagina web sencilla, sin saber de codigo, y el resultado se exporta en un clic.

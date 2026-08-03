@@ -41,6 +41,7 @@ class ExtractedCitaData(BaseModel):
     summary_es: str
     summary_en: str
     id_paciente: str = ""
+    paciente: str = ""
     especialidad_medica: str = ""
     cluster_id: int = -1
     messages_in_cluster: int = 0
@@ -58,6 +59,7 @@ class AnalysisResponse(BaseModel):
 class MessageDetail(BaseModel):
     """Detalle por mensaje individual (una fila por mensaje en el export)."""
     id_paciente: str = ""
+    paciente: str = ""
     especialidad_medica: str = ""
     cluster_id: int = -1
     messages_in_cluster: int = 0

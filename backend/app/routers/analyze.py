@@ -119,6 +119,7 @@ def _generar_excel_export(details: list) -> bytes:
         filas.append({
             "Especialidad médica": d.especialidad_medica,
             "ID paciente": d.id_paciente,
+            "Paciente": d.paciente,
             "Cluster ID": d.cluster_id,
             "Mensajes en clúster": d.messages_in_cluster,
             "Texto original": d.texto_original,
@@ -148,6 +149,7 @@ async def export_results(payload: ExportRequest) -> StreamingResponse:
         detalle_export = [
             MessageDetail(
                 id_paciente=ed.id_paciente,
+                paciente=ed.paciente,
                 especialidad_medica=ed.especialidad_medica,
                 cluster_id=ed.cluster_id,
                 messages_in_cluster=ed.messages_in_cluster,

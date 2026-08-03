@@ -1,0 +1,167 @@
+PITCH TECNICO — GESTION DE CITAS MEDICAS ANALYZER (HU-015)
+
+Version para perfiles tecnicos (desarrolladores, data engineers, arquitectos).
+
+API en FastAPI que ingiere solicitudes de reprogramacion/cancelacion de citas medicas desde archivos Excel, evalua el costo de tokenizacion ES versus EN (tiktoken, o200k_base), mide la fragmentacion del vocabulario medico y extrae la intencion estructurada de cada mensaje con ML clasico (sin LLM local ni Ollama).
+
+1. Resumen ejecutivo
+
+- Problema: un centro de salud procesa alrededor de 15.000 mensajes por dia ("quiero reprogramar con el cardiologo en la manana"). El vocabulario medico/formal en espanol ("reprogramacion", "cardiologia") se fragmenta en multiples subpalabras en BPE, encareciendo el consumo de modelos de lenguaje.
+- Solucion: pipeline que carga masivamente desde Excel (archivo unico o carpeta), agrupa mensajes similares por especialidad, extrae intencion estructurada y mide el impacto economico de procesar en espanol versus traducir a ingles primero.
+- Pregunta de negocio que responde: ¿me conviene optimizar_tokens=True (traducir a ingles) o procesar directo en espanol?
+
+Flujo:
+- optimizar_tokens=False: ES a limpieza a clustering a intencion (lote) a tokens ES.
+- optimizar_tokens=True: ES a deep_translator a EN a clustering a intencion (lote) a tokens EN.
+
+2. Paso a paso de como funciona
+
+Paso 0 — Entorno.
+Comandos: cd backend; python -m venv venv; activar el venv; pip install -r requirements.txt.
+Requisito: Python 3.12 o superior (con 3.14 no hay wheels para pydantic/tiktoken).
+
+Paso 1 — Generar datos de prueba.
+Comando: python scripts/generate_citas.py 50000.
+Genera data/citas_medicas_solicitudes.xlsx con faker (es_ES). 50.000 filas con las columnas id_paciente, paciente, ciudad, especialidad_medica, fecha_solicitada, mensaje_texto. El 10 por ciento de los mensajes se genera vacio (dato sucio intencional para probar tolerancia).
+
+Paso 2 — Entrenar los modelos (solo la primera vez).
+Comando: python scripts/train_pipeline.py.
+Internamente:
+1. Pseudo-labels por keywords: funciones _pseudo_label_accion/horario/especialidad (train_pipeline.py, lineas 159-168).
+2. Aumentacion balanceada: _aumentar_balanceado (linea 171) sintetiza ejemplos hasta MIN_SAMPLES=250 por clase.
+3. Vectorizacion: HashingVectorizer(n_features=2^20, ngram_range=(1,2)) (lineas 249-255). No guarda vocabulario en memoria: es escalable y liviano.
+4. Entrenamiento: 3 clasificadores LinearSVC (lineas 262-266), uno por objetivo:
+   - accion (4 clases): reprogramar, cancelar, confirmar, otro.
+   - preferencia_horario (4): manana, tarde, noche, sin_preferencia.
+   - especialidad (13): 12 especialidades + sin_especificar.
+5. Guardado: 4 archivos en app/models/ (vectorizer.joblib, accion_model.joblib, horario_model.joblib, especialidad_model.joblib).
+
+Resultado verificado: accuracy 1.0000 en los 3 clasificadores. Los archivos .joblib no se suben al repositorio (el de especialidad supera el limite de 100 MB de GitHub); se regeneran con este script.
+
+Paso 3 — Levantar el backend.
+Comando: uvicorn app.main:app --reload.
+API en http://127.0.0.1:8000, Swagger en /docs, ReDoc en /redoc, frontend en / (HTML estatico servido por StaticFiles en app/main.py, lineas 58-60).
+
+Paso 4 — Analisis individual (POST /api/analyze).
+Flujo en analizar_cita() (analysis_service.py, linea 538):
+1. _limpiar_texto (linea 136): strip, colapsa espacios, elimina emojis.
+2. _predecir_intencion (linea 243): un transform y un predict por clasificador.
+3. Traduccion ES a EN con cache (linea 119), solo si optimizar_tokens=True.
+4. Conteo de tokens con tiktoken (o200k_base) ES versus EN (lineas 548-549).
+
+Comando de ejemplo: curl -X POST http://127.0.0.1:8000/api/analyze con JSON {"text": "Deseo reprogramar mi cita con el cardiologo en la manana", "optimizar_tokens": false}.
+
+Paso 5 — Analisis batch (POST /api/analyze/upload).
+Flujo en procesar_archivo_excel (linea 493):
+1. pd.read_excel(io.BytesIO(contents)) y _validar_columnas (linea 206): deteccion heuristica de columnas con fallbacks (mensaje_texto, especialidad_medica, id_paciente).
+2. _procesar_por_especialidad (linea 446): groupby(especialidad) y procesamiento paralelo de cada grupo con ThreadPoolExecutor(max_workers=len(grupos)) (linea 474).
+3. _procesar_especialidad_grupo (linea 336):
+   - Clustering semantico _cluster_mensajes (linea 300): TfidfVectorizer(max_features=500, ngram_range=(1,2)) + MiniBatchKMeans(k=5, batch_size=2048). El representante es el mensaje mas cercano al centroide. Reduce 50.000 solicitudes a alrededor de 60 grupos representativos (minimo 50 mensajes para clusterear, maximo 10 clusters por especialidad).
+   - Traduccion solo de representantes (lineas 355-358) con un pool de 6 workers y cache en disco (translation_cache.json, ignorado por git). El resto del cluster reutiliza esa traduccion.
+   - Intencion en lote _predecir_intencion_lote (linea 262): un solo transform y predict para todos los mensajes del grupo.
+   - Metricas por mensaje (lineas 415-438): tokens ES/EN y fragmentacion_ratio = tokens_es / tokens_en.
+4. Timings por etapa (agrupacion, clustering, traduccion, tokenizacion, analisis) agregados con max entre especialidades, aproximando el tiempo de pared real (linea 484).
+
+Paso 6 — Streaming SSE (POST /api/analyze/upload/stream).
+procesar_archivo_excel_stream (linea 577): emite eventos con stage y progress: lectura, clustering, clasificacion, detalle (lotes de 500 en details_batch) y completo. El trabajo pesado se descarga del event loop con run_in_executor (linea 644). Headers SSE con Cache-Control: no-cache y X-Accel-Buffering: no (analyze.py, lineas 83-87).
+
+Paso 7 — Proyeccion economica (GET /api/analyze/cost-estimate).
+cost_estimate (analyze.py, linea 190):
+- costo_directo = (tokens_es por dia por 1.000.000) por 2,50 dolares.
+- costo_optimizado = (tokens_en por dia por 1.000.000) por 2,50 dolares.
+- ahorro_diario = costo_directo menos costo_optimizado.
+Default: 15.000 mensajes por dia (config.py, linea 25) y 2,50 dolares por millon de tokens (config.py, linea 22). Tokens de referencia por mensaje: 46 ES y 38 EN (medidos con o200k_base).
+
+Paso 8 — Exportacion (POST /api/analyze/export).
+_generar_excel_export (analyze.py, linea 114): vuelca los details a un Excel con una fila por mensaje y 14 columnas (especialidad, ID, cluster, texto ES/limpio/EN, accion, horario, tokens ES/EN, ahorro, ratio, costo).
+
+3. Comandos paso a paso (hoja de ruta rapida)
+
+1. Setup: python -m venv venv; activar venv; pip install -r requirements.txt.
+2. Datos y modelos (primera vez): python scripts/generate_citas.py 50000 y python scripts/train_pipeline.py.
+3. Servidor: uvicorn app.main:app --reload.
+4. Probar endpoints:
+   - curl -X POST /api/analyze con JSON.
+   - curl -N -X POST /api/analyze/upload/stream con archivo y optimizar_tokens=true.
+   - curl GET /api/analyze/cost-estimate con messages_per_day=15000 y optimizar_tokens=true.
+5. Cliente batch asincrono (requiere backend corriendo): python scripts/procesar_excel_async.py.
+
+4. Librerias y su rol
+
+- fastapi 0.115.6: framework web + validacion Pydantic.
+- uvicorn[standard] 0.34.0: servidor ASGI.
+- pydantic 2.10.4: schemas de request/response (app/models/schemas.py).
+- tiktoken 0.8.0: tokenizacion o200k_base (mismo encoder de GPT-4o).
+- pandas 2.2.3 y openpyxl 3.1.5: lectura/escritura de Excel.
+- scikit-learn 1.9.0: HashingVectorizer, TfidfVectorizer, MiniBatchKMeans y LinearSVC.
+- joblib 1.5.3: persistencia de modelos .joblib.
+- deep-translator 1.11.4: traduccion ES a EN (backend Google Translate, sin API key).
+- httpx 0.28.1: cliente async para el batch (procesar_excel_async.py).
+- tqdm 4.67.1: barra de progreso en el cliente batch.
+- python-multipart 0.0.18: parseo de multipart/form-data (uploads).
+- pyfiglet 1.0.2: banner GEOXOR de arranque (app/core/config.py, linea 43).
+- faker 37.0.0: generador de datos de prueba (es_ES).
+
+5. Optimizacion maxima del hardware
+
+5.1 Usar todos los nucleos CPU (BLAS).
+Se fijan las variables de hilos de las librerias numericas al inicio, antes de importar numpy/sklearn:
+- OMP_NUM_THREADS = 12, MKL_NUM_THREADS = 12 y OPENBLAS_NUM_THREADS = 12 (analysis_service.py, lineas 21-23 y train_pipeline.py, lineas 20-22).
+Como ajustarlo a tu maquina: reemplazar el 12 por tu numero de nucleos fisicos. En Linux se detecta con nproc; en Python, con os.cpu_count(). Ejemplo dinamico: asignar a las tres variables el valor de os.cpu_count(). Ojo: en CPUs con hyper-threading, a veces rinde mas usar solo los nucleos fisicos para evitar contencion de cache.
+
+5.2 Paralelismo a nivel de especialidad.
+Cada especialidad medica se procesa como una tarea independiente en un pool de hilos: ThreadPoolExecutor(max_workers=max(1, len(items))) (analysis_service.py, linea 474). Como los grupos son independientes, len(items) hilos satura todos los nucleos. La agregacion de timings usa max entre grupos.
+
+5.3 Pool de traduccion paralela.
+_translator_pool = ThreadPoolExecutor(max_workers=6) (analysis_service.py, linea 78). Las traducciones de los representantes se disparan en paralelo con pool.map (linea 159), mas una cache en disco (translation_cache.json) que evita retraducir textos repetidos entre ejecuciones.
+
+5.4 Memoria controlada para 50.000 mensajes.
+- MiniBatchKMeans(batch_size=2048): procesa por lotes, no en memoria completa.
+- TfidfVectorizer(max_features=500): solo 500 features por especialidad.
+- HashingVectorizer(2^20): sin vocabulario almacenado, vectoriza en streaming.
+- La vectorizacion del clustering se hace por especialidad, no sobre el dataset completo.
+
+5.5 Inferencia en lote (amortiza overhead).
+_predecir_intencion_lote (linea 262) hace un solo transform y predict para todos los mensajes del grupo, en vez de una llamada por mensaje. El path individual (linea 243) tambien comparte el mismo X para los 3 clasificadores.
+
+5.6 Cliente batch con concurrencia alta.
+MAX_CONCURRENT_REQUESTS = 50, semaforo asyncio y httpx.Limits con max_keepalive_connections=50 y max_connections=50 (procesar_excel_async.py, lineas 27-58). 50 conexiones HTTP simultaneas con keep-alive, limitadas por semaforo para no saturar el servidor.
+
+5.7 Escalado del servidor.
+Para carga alta, levantar un worker por nucleo fisico: uvicorn app.main:app --workers N. Recomendado: N = nucleos fisicos (menos que los logicos). En desarrollo seguir con --reload (que fuerza 1 worker).
+
+5.8 Resumen de ajustes segun hardware.
+- Nucleos BLAS: OMP/MKL/OPENBLAS_NUM_THREADS (analysis_service.py, lineas 21-23).
+- Hilos por especialidad: max_workers=len(grupos) (linea 474).
+- Hilos de traduccion: _translator_pool = 6 (linea 78).
+- Batch de clustering: batch_size=2048 (linea 315).
+- Conexiones cliente: MAX_CONCURRENT_REQUESTS=50 (procesar_excel_async.py, linea 27).
+- Workers del servidor: --workers N (comando uvicorn).
+
+6. Endpoints
+
+- POST /api/analyze: analisis individual (JSON + optimizar_tokens).
+- POST /api/analyze/upload: subir Excel, respuesta JSON batch.
+- POST /api/analyze/upload/stream: upload con progreso en tiempo real (SSE, lotes de 500).
+- POST /api/analyze/folder: escaneo de carpeta con multiples Excel.
+- POST /api/analyze/export: genera Excel con una fila por mensaje.
+- GET /api/analyze/cost-estimate: proyeccion economica (default 15.000 mensajes por dia).
+
+7. Resultados y verificacion
+
+- POST /api/analyze (ejemplo HU-015): {"accion": "reprogramar", "especialidad": "cardiologia", "preferencia_horario": "manana"}.
+- Tokens ES versus EN con optimizar_tokens=true: 28 ES y 23 EN, fragmentacion_ratio 1.2174.
+- POST /api/analyze/upload (50.000 solicitudes): HTTP 200, total 60 grupos, details de aproximadamente 45.000 filas.
+- POST /api/analyze/export: Excel con 45.000 filas y 14 columnas.
+- GET /api/analyze/cost-estimate: ahorro diario, mensual y anual.
+- Entrenamiento (3 clasificadores): accuracy 1.0000.
+- Inferencia: menos de 1 ms por mensaje (LinearSVC sobre HashingVectorizer).
+
+8. Notas tecnicas
+
+- Sin LLM local: todo el procesamiento usa scikit-learn y keywords.
+- Traduccion: deep_translator (Google Translate, sin API key) solo cuando optimizar_tokens=True y unicamente sobre los representantes de cluster.
+- Compatibilidad: el flag optimizar_tokens acepta optent_tokens como alias.
+- Streaming: los details se envian en lotes de 500 por evento SSE.
+- Frontend: frontend/index.html con Chart.js v4 (CDN) para graficas de tiempos, tokens, accion, horario, especialidad y fragmentacion; drag-and-drop, toggle de optimizar_tokens y export JSON/Excel.
+- CORS: abierto (allow_origins=["*"]).

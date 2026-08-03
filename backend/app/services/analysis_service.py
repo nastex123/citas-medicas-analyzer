@@ -203,6 +203,18 @@ def _detectar_columna_paciente(df: pd.DataFrame) -> str | None:
     return None
 
 
+def _detectar_columna_paciente_nombre(df: pd.DataFrame) -> str | None:
+    candidatas = [
+        "paciente", "paciente_nombre", "nombre_paciente", "nombre",
+        "patient", "patient_name", "name",
+    ]
+    columnas = [c.lower().strip() for c in df.columns]
+    for cand in candidatas:
+        if cand in columnas:
+            return df.columns[columnas.index(cand)]
+    return None
+
+
 def _validar_columnas(df: pd.DataFrame) -> None:
     """Criterio 1 de la HU: validar que las columnas se parseen antes del análisis."""
     col_mensaje = _detectar_columna_mensaje(df)
@@ -338,6 +350,7 @@ def _procesar_especialidad_grupo(
     textos_originales: list[str],
     textos_limpios: list[str],
     ids_grupo: list[str],
+    nombres_grupo: list[str],
     optimizar_tokens: bool,
 ) -> tuple[list[AnalysisResponse], list[MessageDetail], dict]:
     timings = {}
@@ -390,6 +403,7 @@ def _procesar_especialidad_grupo(
         timings_tokenizacion += time.time() - t0
 
         id_rep = ids_grupo[rep_idx] if rep_idx < len(ids_grupo) else ""
+        nombre_rep = nombres_grupo[rep_idx] if rep_idx < len(nombres_grupo) else ""
 
         results.append(AnalysisResponse(
             metrics=TokenMetrics(
@@ -403,6 +417,7 @@ def _procesar_especialidad_grupo(
                 summary_es=sum_es,
                 summary_en=sum_en,
                 id_paciente=id_rep,
+                paciente=nombre_rep,
                 especialidad_medica=esp_name,
                 cluster_id=cluster_id,
                 messages_in_cluster=n_messages,
@@ -424,6 +439,7 @@ def _procesar_especialidad_grupo(
 
         details.append(MessageDetail(
             id_paciente=ids_grupo[j] if j < len(ids_grupo) else "",
+            paciente=nombres_grupo[j] if j < len(nombres_grupo) else "",
             especialidad_medica=esp_name,
             cluster_id=cid,
             messages_in_cluster=cluster_size.get(cid, 1),
@@ -448,6 +464,7 @@ def _procesar_por_especialidad(
     col_mensaje: str,
     col_especialidad: str | None,
     col_paciente: str | None,
+    col_paciente_nombre: str | None,
     optimizar_tokens: bool,
 ) -> tuple[list[AnalysisResponse], list[MessageDetail], dict]:
     timings = {}
@@ -466,15 +483,16 @@ def _procesar_por_especialidad(
         textos_originales = textos_originales[textos_originales.ne("")].tolist()
         textos_limpios = [_limpiar_texto(t) for t in textos_originales]
         ids = group[col_paciente].astype(str).tolist() if col_paciente else [""] * len(group)
-        return name, textos_originales, textos_limpios, ids
+        nombres = group[col_paciente_nombre].astype(str).tolist() if col_paciente_nombre else [""] * len(group)
+        return name, textos_originales, textos_limpios, ids, nombres
 
     items = [_preparar_grupo(name, group) for name, group in grupos]
-    items = [(n, to, tl, i) for n, to, tl, i in items if tl]
+    items = [(n, to, tl, i, nm) for n, to, tl, i, nm in items if tl]
 
     with ThreadPoolExecutor(max_workers=max(1, len(items))) as pool:
         futures = [
-            pool.submit(_procesar_especialidad_grupo, name, to, tl, ids, optimizar_tokens)
-            for name, to, tl, ids in items
+            pool.submit(_procesar_especialidad_grupo, name, to, tl, ids, nombres, optimizar_tokens)
+            for name, to, tl, ids, nombres in items
         ]
         for fut in futures:
             results_chunk, details_chunk, t_chunk = fut.result()
@@ -500,9 +518,10 @@ def procesar_archivo_excel(
     col_mensaje = _detectar_columna_mensaje(df)
     col_especialidad = _detectar_columna_especialidad(df)
     col_paciente = _detectar_columna_paciente(df)
+    col_paciente_nombre = _detectar_columna_paciente_nombre(df)
 
     return _procesar_por_especialidad(
-        df, col_mensaje, col_especialidad, col_paciente, optimizar_tokens
+        df, col_mensaje, col_especialidad, col_paciente, col_paciente_nombre, optimizar_tokens
     )
 
 
@@ -524,9 +543,10 @@ def procesar_carpeta_excel(
         col_mensaje = _detectar_columna_mensaje(df)
         col_especialidad = _detectar_columna_especialidad(df)
         col_paciente = _detectar_columna_paciente(df)
+        col_paciente_nombre = _detectar_columna_paciente_nombre(df)
 
         lote, detalle_lote, t_chunk = _procesar_por_especialidad(
-            df, col_mensaje, col_especialidad, col_paciente, optimizar_tokens
+            df, col_mensaje, col_especialidad, col_paciente, col_paciente_nombre, optimizar_tokens
         )
         resultados.extend(lote)
         detalles.extend(detalle_lote)
@@ -594,6 +614,7 @@ async def procesar_archivo_excel_stream(
     col_mensaje = _detectar_columna_mensaje(df)
     col_especialidad = _detectar_columna_especialidad(df)
     col_paciente = _detectar_columna_paciente(df)
+    col_paciente_nombre = _detectar_columna_paciente_nombre(df)
 
     mensajes = df[col_mensaje].dropna().astype(str).str.strip()
     total_original = int(mensajes.ne("").sum())
@@ -638,7 +659,7 @@ async def procesar_archivo_excel_stream(
 
     def _do_full_processing():
         return _procesar_por_especialidad(
-            df, col_mensaje, col_especialidad, col_paciente, optimizar_tokens
+            df, col_mensaje, col_especialidad, col_paciente, col_paciente_nombre, optimizar_tokens
         )
 
     all_results, all_details, timings = await asyncio.get_event_loop().run_in_executor(
