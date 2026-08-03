@@ -16,7 +16,7 @@ optimizar_tokens=True:   Mensaje ES → limpieza → deep_translator → EN → 
 - `deep_translator` usa Google Translate como backend (sin API key). Solo se activa cuando `optimizar_tokens=True`.
 - `scikit-learn` (3× LinearSVC) extrae `accion`, `especialidad`, `preferencia_horario` — **sin Ollama ni LLM local**.
 - La limpieza (`_limpiar_texto`) aplica strip, colapsa espacios y quita emojis.
-- Clustering por especialidad reduce 50k solicitudes a ~60 grupos representativos.
+- Clustering por especialidad reduce 50k solicitudes a ~60 grupos representativos. El flag `clusterizar` (default `True`) permite desactivarlo: con `False` se analiza **cada mensaje individualmente** (texto limpio + traducción + intención por mensaje, una fila por mensaje).
 - `fragmentacion_ratio = tokens_es / tokens_en` cuantifica la fragmentación del vocabulario médico.
 - `_predecir_intencion_lote` predice la intención de todos los mensajes en una sola vectorización.
 

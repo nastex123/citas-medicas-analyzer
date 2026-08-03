@@ -142,6 +142,11 @@ curl -X POST http://127.0.0.1:8000/api/analyze/upload \
   -F "optimizar_tokens=false"
 ```
 
+El campo `clusterizar` (default `true`) controla el método de análisis: con
+`true` se agrupa por similitud (clustering) y se analizan los representativos;
+con `false` se analiza **cada mensaje individualmente** (texto limpio +
+traducción + intención por mensaje).
+
 ### POST `/api/analyze/upload/stream` — Subir archivo (progreso en tiempo real, SSE)
 
 ```bash
@@ -150,9 +155,10 @@ curl -N -X POST http://127.0.0.1:8000/api/analyze/upload/stream \
   -F "optimizar_tokens=false"
 ```
 
-Devuelve eventos SSE con `stage` (lectura, clustering, clasificacion, detalle,
-completo) y progreso porcentual. Los `details` (una fila por mensaje) se envían en
-lotes de 500 por evento (`details_batch`).
+Acepta también `clusterizar`. Devuelve eventos SSE con `stage` (lectura,
+clustering, clasificacion, detalle, completo) y progreso porcentual. Los
+`details` (una fila por mensaje) se envían en lotes de 500 por evento
+(`details_batch`).
 
 ### POST `/api/analyze/folder` — Escanear carpeta
 
@@ -162,7 +168,8 @@ curl -X POST http://127.0.0.1:8000/api/analyze/folder \
   -F "optimizar_tokens=false"
 ```
 
-Devuelve `total`, `results` (representativos), `timings` y `details` (una fila por mensaje).
+Acepta también `clusterizar`. Devuelve `total`, `results` (representativos),
+`timings` y `details` (una fila por mensaje).
 
 ### GET `/api/analyze/cost-estimate` — Proyección económica
 

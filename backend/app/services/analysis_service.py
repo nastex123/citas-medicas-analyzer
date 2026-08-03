@@ -352,6 +352,7 @@ def _procesar_especialidad_grupo(
     ids_grupo: list[str],
     nombres_grupo: list[str],
     optimizar_tokens: bool,
+    clusterizar: bool = True,
 ) -> tuple[list[AnalysisResponse], list[MessageDetail], dict]:
     timings = {}
 
@@ -359,7 +360,11 @@ def _procesar_especialidad_grupo(
         return [], [], timings
 
     t0 = time.time()
-    reps, labels = _cluster_mensajes(textos_limpios)
+    if clusterizar:
+        reps, labels = _cluster_mensajes(textos_limpios)
+    else:
+        reps = [(i, t, 1, i) for i, t in enumerate(textos_limpios)]
+        labels = list(range(len(textos_limpios)))
     timings["clustering"] = time.time() - t0
 
     rep_textos_limpios = [textos_limpios[r[3]] for r in reps]
@@ -466,6 +471,7 @@ def _procesar_por_especialidad(
     col_paciente: str | None,
     col_paciente_nombre: str | None,
     optimizar_tokens: bool,
+    clusterizar: bool = True,
 ) -> tuple[list[AnalysisResponse], list[MessageDetail], dict]:
     timings = {}
     all_results = []
@@ -491,7 +497,7 @@ def _procesar_por_especialidad(
 
     with ThreadPoolExecutor(max_workers=max(1, len(items))) as pool:
         futures = [
-            pool.submit(_procesar_especialidad_grupo, name, to, tl, ids, nombres, optimizar_tokens)
+            pool.submit(_procesar_especialidad_grupo, name, to, tl, ids, nombres, optimizar_tokens, clusterizar)
             for name, to, tl, ids, nombres in items
         ]
         for fut in futures:
@@ -511,6 +517,7 @@ def _procesar_por_especialidad(
 def procesar_archivo_excel(
     contents: bytes,
     optimizar_tokens: bool = False,
+    clusterizar: bool = True,
 ) -> tuple[list[AnalysisResponse], list[MessageDetail], dict]:
     df = pd.read_excel(io.BytesIO(contents), engine="openpyxl")
     _validar_columnas(df)
@@ -521,13 +528,14 @@ def procesar_archivo_excel(
     col_paciente_nombre = _detectar_columna_paciente_nombre(df)
 
     return _procesar_por_especialidad(
-        df, col_mensaje, col_especialidad, col_paciente, col_paciente_nombre, optimizar_tokens
+        df, col_mensaje, col_especialidad, col_paciente, col_paciente_nombre, optimizar_tokens, clusterizar
     )
 
 
 def procesar_carpeta_excel(
     carpeta: Path,
     optimizar_tokens: bool = False,
+    clusterizar: bool = True,
 ) -> tuple[list[AnalysisResponse], list[MessageDetail], dict]:
     archivos = list(carpeta.glob("*.xlsx")) + list(carpeta.glob("*.xls"))
     if not archivos:
@@ -546,7 +554,7 @@ def procesar_carpeta_excel(
         col_paciente_nombre = _detectar_columna_paciente_nombre(df)
 
         lote, detalle_lote, t_chunk = _procesar_por_especialidad(
-            df, col_mensaje, col_especialidad, col_paciente, col_paciente_nombre, optimizar_tokens
+            df, col_mensaje, col_especialidad, col_paciente, col_paciente_nombre, optimizar_tokens, clusterizar
         )
         resultados.extend(lote)
         detalles.extend(detalle_lote)
@@ -597,6 +605,7 @@ def analizar_cita(texto_es: str, optimizar_tokens: bool = False) -> AnalysisResp
 async def procesar_archivo_excel_stream(
     contents: bytes,
     optimizar_tokens: bool = False,
+    clusterizar: bool = True,
 ) -> AsyncGenerator[str, None]:
 
     def _emit(event_type: str, data: dict) -> str:
@@ -659,7 +668,7 @@ async def procesar_archivo_excel_stream(
 
     def _do_full_processing():
         return _procesar_por_especialidad(
-            df, col_mensaje, col_especialidad, col_paciente, col_paciente_nombre, optimizar_tokens
+            df, col_mensaje, col_especialidad, col_paciente, col_paciente_nombre, optimizar_tokens, clusterizar
         )
 
     all_results, all_details, timings = await asyncio.get_event_loop().run_in_executor(
@@ -668,7 +677,10 @@ async def procesar_archivo_excel_stream(
 
     yield _emit("progress", {
         "stage": "clasificacion",
-        "message": f"Extrayendo intención de {len(all_results)} representantes...",
+        "message": (
+            f"Extrayendo intención de {len(all_results)} "
+            f"{'mensajes' if not clusterizar else 'representantes'}..."
+        ),
         "progress": 90,
         "total": total_original,
         "processed": total_original,
@@ -689,7 +701,10 @@ async def procesar_archivo_excel_stream(
 
     yield _emit("progress", {
         "stage": "completo",
-        "message": f"Completado: {total_original} mensajes → {len(all_results)} grupos representativos",
+        "message": (
+            f"Completado: {total_original} mensajes analizados "
+            f"{'individualmente' if not clusterizar else f'→ {len(all_results)} grupos representativos'}"
+        ),
         "progress": 100,
         "total": total_original,
         "processed": total_original,

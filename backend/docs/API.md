@@ -78,6 +78,7 @@ Multipart form-data:
 |---|---|---|---|
 | `file` | archivo `.xlsx` | Sí | Archivo Excel con columnas tipo `id_paciente`, `mensaje_texto`, `especialidad_medica` |
 | `optimizar_tokens` | boolean | No (default: `false`) | Activar traducción previa |
+| `clusterizar` | boolean | No (default: `true`) | Si `true`, agrupa mensajes similares por clúster y analiza los representativos. Si `false`, analiza **cada mensaje individualmente** (sin clustering) |
 
 ### Ejemplo con curl
 
@@ -85,6 +86,12 @@ Multipart form-data:
 curl -X POST http://127.0.0.1:8000/api/analyze/upload \
   -F "file=@citas_medicas_solicitudes.xlsx" \
   -F "optimizar_tokens=false"
+
+# Sin clustering: una fila de resultado por cada mensaje
+curl -X POST http://127.0.0.1:8000/api/analyze/upload \
+  -F "file=@citas_medicas_solicitudes.xlsx" \
+  -F "optimizar_tokens=true" \
+  -F "clusterizar=false"
 ```
 
 ### Respuesta exitosa (200)
@@ -169,6 +176,9 @@ curl -N -X POST http://127.0.0.1:8000/api/analyze/upload/stream \
   -F "optimizar_tokens=false"
 ```
 
+Acepta el mismo campo `clusterizar` que `/upload`. Con `clusterizar=false` el
+evento `completo` reporta cada mensaje como fila de `results` (uno por mensaje).
+
 Eventos emitidos:
 
 ```
@@ -209,6 +219,7 @@ Multipart form-data:
 |---|---|---|---|
 | `folder_path` | `string` | Sí | Ruta absoluta o relativa a la carpeta |
 | `optimizar_tokens` | boolean | No (default: `false`) | Activar traducción previa |
+| `clusterizar` | boolean | No (default: `true`) | Si `false`, analiza cada mensaje individualmente (sin clustering) |
 
 ### Ejemplo con curl
 

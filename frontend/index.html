@@ -184,6 +184,7 @@ tr:hover td { background: #0f1f4a; }
 ::-webkit-scrollbar { width: 14px; }
 ::-webkit-scrollbar-track { background: #050a1f; }
 ::-webkit-scrollbar-thumb { background: #0ff; border: 3px solid #000; }
+.method-hint { margin: 6px 0 14px; padding: 8px 10px; background: #0a1a38; border: 2px solid #ffe14d; color: #ffe14d; font-size: 9px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -211,6 +212,13 @@ tr:hover td { background: #0f1f4a; }
       <input type="text" id="folderPath" placeholder="/ruta/a/carpeta/con/archivos/xlsx">
     </div>
   </div>
+
+  <h2>Método de análisis</h2>
+  <div class="mode-selector">
+    <button class="mode-btn active" id="modeCluster" onclick="setMethod('cluster')">Agrupar por similitud (clustering)</button>
+    <button class="mode-btn" id="modeNoCluster" onclick="setMethod('nocluster')">Analizar cada mensaje (sin clustering)</button>
+  </div>
+  <div class="method-hint" id="methodHint" style="display:none;">Modo sin clustering: se traduce y clasifica cada mensaje individualmente. Con archivos grandes y traducción activada puede ser más lento o chocar con límites del traductor.</div>
 
   <div class="actions">
     <button class="btn btn-primary" id="btnRun" onclick="runAnalysis()">Ejecutar análisis</button>
@@ -322,6 +330,7 @@ tr:hover td { background: #0f1f4a; }
 let currentResults = [];
 let currentDetails = [];
 let currentMode = 'file';
+let currentMethod = 'cluster';
 let startTime = 0;
 let chartInstances = [];
 
@@ -331,6 +340,14 @@ function setMode(mode) {
     document.getElementById('modeFolder').classList.toggle('active', mode === 'folder');
     document.getElementById('fileArea').style.display = mode === 'file' ? 'block' : 'none';
     document.getElementById('folderArea').style.display = mode === 'folder' ? 'block' : 'none';
+}
+
+function setMethod(method) {
+    currentMethod = method;
+    const cluster = method === 'cluster';
+    document.getElementById('modeCluster').classList.toggle('active', cluster);
+    document.getElementById('modeNoCluster').classList.toggle('active', !cluster);
+    document.getElementById('methodHint').style.display = cluster ? 'none' : 'block';
 }
 
 const fileInput = document.getElementById('fileInput');
@@ -403,7 +420,8 @@ async function runAnalysis() {
             formData = new FormData();
             formData.append('file', file);
             formData.append('optimizar_tokens', 'true');
-            url = '/api/analyze/upload/stream?optimizar_tokens=true';
+            formData.append('clusterizar', currentMethod === 'cluster' ? 'true' : 'false');
+            url = `/api/analyze/upload/stream?optimizar_tokens=true&clusterizar=${currentMethod === 'cluster'}`;
         } else {
             const folderPath = document.getElementById('folderPath').value.trim();
             if (!folderPath) {
@@ -413,7 +431,8 @@ async function runAnalysis() {
             formData = new FormData();
             formData.append('folder_path', folderPath);
             formData.append('optimizar_tokens', 'true');
-            url = '/api/analyze/folder?optimizar_tokens=true';
+            formData.append('clusterizar', currentMethod === 'cluster' ? 'true' : 'false');
+            url = `/api/analyze/folder?optimizar_tokens=true&clusterizar=${currentMethod === 'cluster'}`;
         }
 
         btn.textContent = 'Procesando...';
@@ -511,7 +530,8 @@ function finishAnalysis(results, timings) {
 
     hideProgress();
     const segs = ((performance.now() - startTime) / 1000).toFixed(1);
-    setStatus(`Completado: ${results.length} grupo(s) representativo(s) analizado(s) en ${segs}s`, 'success');
+    const unit = currentMethod === 'cluster' ? 'grupo(s) representativo(s)' : 'mensaje(s)';
+    setStatus(`Completado: ${results.length} ${unit} analizado(s) en ${segs}s`, 'success');
 }
 
 function renderResults(results) {
@@ -521,11 +541,14 @@ function renderResults(results) {
         return;
     }
 
+    const MAX_TABLE_ROWS = 500;
+    const visible = results.slice(0, MAX_TABLE_ROWS);
+
     let html = '<table><thead><tr>';
     html += '<th>Especialidad</th><th>Mensaje representativo</th><th>Acción</th><th>Horario</th><th>Mensajes</th><th>Tokens ES</th><th>Tokens EN</th><th>Frag. ES/EN</th><th>Costo USD (EN)</th>';
     html += '</tr></thead><tbody>';
 
-    results.forEach((r) => {
+    visible.forEach((r) => {
         const m = r.metrics || {};
         const e = r.extracted_data || r || {};
         const intent = e.intent || {};
@@ -555,6 +578,11 @@ function renderResults(results) {
     });
 
     html += '</tbody></table>';
+
+    if (results.length > visible.length) {
+        html += `<div class="empty-state">Mostrando primeras ${visible.length.toLocaleString()} de ${results.length.toLocaleString()} filas</div>`;
+    }
+
     container.innerHTML = html;
 }
 

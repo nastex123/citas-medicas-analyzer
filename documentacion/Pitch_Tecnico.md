@@ -278,6 +278,11 @@ uvicorn app.main:app --workers N
 | `POST` | `/api/analyze/export` | Genera `.xlsx` con una fila por mensaje |
 | `GET` | `/api/analyze/cost-estimate` | Proyección económica (default 15,000 msgs/día) |
 
+> Los endpoints batch (`upload`, `upload/stream`, `folder`) aceptan además el
+> flag `clusterizar` (default `true`). Con `clusterizar=false` el clustering se
+> desactiva y **cada mensaje se analiza individualmente** (texto limpio,
+> traducción y métricas por mensaje, `results` = una fila por mensaje).
+
 ---
 
 ## 7. Resultados / verificación

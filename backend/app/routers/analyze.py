@@ -52,13 +52,14 @@ async def analyze_upload(
     file: UploadFile,
     optimizar_tokens: bool = Form(False),
     optent_tokens: bool = Form(False),
+    clusterizar: bool = Form(True),
 ) -> BatchAnalysisResponse:
     if not file.filename.endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos .xlsx.")
 
     contents = await file.read()
     flag = _flag(optimizar_tokens, optent_tokens)
-    results, details, timings = procesar_archivo_excel(contents, optimizar_tokens=flag)
+    results, details, timings = procesar_archivo_excel(contents, optimizar_tokens=flag, clusterizar=clusterizar)
     return BatchAnalysisResponse(
         total=len(results),
         results=results,
@@ -72,13 +73,14 @@ async def analyze_upload_stream(
     file: UploadFile,
     optimizar_tokens: bool = Form(False),
     optent_tokens: bool = Form(False),
+    clusterizar: bool = Form(True),
 ):
     if not file.filename.endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos .xlsx.")
     contents = await file.read()
     flag = _flag(optimizar_tokens, optent_tokens)
     return StreamingResponse(
-        procesar_archivo_excel_stream(contents, optimizar_tokens=flag),
+        procesar_archivo_excel_stream(contents, optimizar_tokens=flag, clusterizar=clusterizar),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -93,6 +95,7 @@ async def analyze_folder(
     folder_path: str = Form(...),
     optimizar_tokens: bool = Form(False),
     optent_tokens: bool = Form(False),
+    clusterizar: bool = Form(True),
 ) -> BatchAnalysisResponse:
     path = Path(folder_path)
     if not path.is_dir():
@@ -100,7 +103,7 @@ async def analyze_folder(
 
     flag = _flag(optimizar_tokens, optent_tokens)
     try:
-        results, details, timings = procesar_carpeta_excel(path, optimizar_tokens=flag)
+        results, details, timings = procesar_carpeta_excel(path, optimizar_tokens=flag, clusterizar=clusterizar)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return BatchAnalysisResponse(
